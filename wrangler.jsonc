@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "modural-3d-view",
+  "name": "modular-3d-view",
   "main": "src/worker.js",
   "compatibility_date": "2026-08-01",
   "assets": {
@@ -10,7 +10,7 @@
     "run_worker_first": ["/api/*"]
   },
   "vars": {
-    "APP_BASE_URL": "https://modural-3d-view.workers.dev",
+    "APP_BASE_URL": "https://modular-3d-view.workers.dev",
     "ALLOW_DEMO_LICENSE": "false",
     "TRIMBLE_REGION": "us"
   },
