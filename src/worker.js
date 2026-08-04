@@ -62,7 +62,7 @@ async function validateLicense(body, env) {
     const response = await fetch(env.LICENSE_SERVER_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(env.LICENSE_SERVER_TOKEN ? { authorization: `Bearer ${env.LICENSE_SERVER_TOKEN}` } : {}) },
-      body: JSON.stringify({ email: body.email, license_key: body.licenseKey, product: 'MODURAL-3D VIEW' })
+      body: JSON.stringify({ email: body.email, license_key: body.licenseKey, product: 'MODULAR-3D VIEW' })
     });
     if (!response.ok) return { valid: false, message: 'La licencia no pudo validarse.' };
     const result = await response.json();
@@ -74,7 +74,7 @@ async function validateLicense(body, env) {
 
 async function api(request, env) {
   const url = new URL(request.url);
-  if (url.pathname === '/api/health') return json({ ok: true, service: 'MODURAL-3D VIEW' });
+  if (url.pathname === '/api/health') return json({ ok: true, service: 'MODULAR-3D VIEW' });
   if (url.pathname === '/api/config') return json({ trimbleConfigured: configured(env), demoEnabled: env.ALLOW_DEMO_LICENSE === 'true' });
   if (url.pathname === '/api/license/validate' && request.method === 'POST') {
     const body = await request.json().catch(() => ({}));
