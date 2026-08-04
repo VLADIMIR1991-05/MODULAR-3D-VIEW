@@ -7,7 +7,7 @@ Aplicación web para validar licencias de MODURAL-3D VIEW y conectar cada usuari
 1. Validación de correo y licencia.
 2. Inicio de sesión seguro mediante Trimble ID.
 3. Consulta de proyectos permitidos en Trimble Connect.
-4. Apertura del proyecto en el área reservada para el visor 3D oficial.
+4. Apertura del proyecto en el visor 3D oficial mediante Workspace API.
 
 ## Desarrollo local
 
@@ -54,4 +54,6 @@ El archivo `render.yaml` permite crear el servicio desde un Blueprint. Configura
 
 ## Estado del visor
 
-El flujo de autenticación y consulta de proyectos está implementado. El área visual está preparada para incorporar el componente 3D oficial de Trimble mediante Workspace API (`embed.init3DViewer`) una vez que Trimble habilite el componente para el dominio registrado.
+El visor oficial está integrado mediante Workspace API (`embed.setTokens` y `embed.init3DViewer`). Trimble debe tener registrado y habilitado el dominio final y la URL de retorno para que el componente pueda cargar proyectos reales.
+
+Los tokens de actualización permanecen en el servidor. El navegador recibe solamente el token de acceso temporal requerido por el componente oficial.
