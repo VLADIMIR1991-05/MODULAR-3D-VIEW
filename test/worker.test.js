@@ -11,7 +11,7 @@ const env = {
 test('health endpoint responds', async () => {
   const response = await worker.fetch(new Request('https://example.com/api/health'), env);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true, service: 'MODURAL-3D VIEW' });
+  assert.deepEqual(await response.json(), { ok: true, service: 'MODULAR-3D VIEW' });
 });
 
 test('validates demo license and creates session', async () => {
