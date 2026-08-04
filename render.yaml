@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: modural-3d-view
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: APP_BASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALLOW_DEMO_LICENSE
+        value: "false"
+      - key: TRIMBLE_CLIENT_ID
+        sync: false
+      - key: TRIMBLE_CLIENT_SECRET
+        sync: false
+      - key: TRIMBLE_APP_NAME
+        sync: false
+      - key: TRIMBLE_CALLBACK_URL
+        sync: false
+      - key: LICENSE_SERVER_URL
+        sync: false
+      - key: LICENSE_SERVER_TOKEN
+        sync: false
