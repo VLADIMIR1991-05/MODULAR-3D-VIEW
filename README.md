@@ -1,8 +1,8 @@
-# MODURAL-3D VIEW
+# MODULAR-3D VIEW
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/VLADIMIR1991-05/MODURAL-3D-VIEW)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/VLADIMIR1991-05/MODULAR-3D-VIEW)
 
-Aplicación web para validar licencias de MODURAL-3D VIEW y conectar cada usuario con sus proyectos de SketchUp almacenados en Trimble Connect.
+Aplicación web para validar licencias de MODULAR-3D VIEW y conectar cada usuario con sus proyectos de SketchUp almacenados en Trimble Connect.
 
 ## Flujo
 
