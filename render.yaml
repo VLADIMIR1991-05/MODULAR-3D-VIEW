@@ -11,8 +11,6 @@ services:
         value: 22
       - key: APP_BASE_URL
         sync: false
-      - key: SESSION_SECRET
-        generateValue: true
       - key: ALLOW_DEMO_LICENSE
         value: "false"
       - key: TRIMBLE_CLIENT_ID
