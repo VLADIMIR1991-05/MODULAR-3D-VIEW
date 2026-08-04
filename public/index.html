@@ -56,16 +56,18 @@
       <section class="screen viewer-screen" id="viewer-screen">
         <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><button class="secondary" id="back-projects">Proyectos</button></header>
         <div class="viewer-stage" id="viewer-stage">
-          <div class="model-placeholder" aria-label="Área del visor 3D">
+          <iframe id="connect-frame" title="Visor 3D de Trimble Connect" allow="fullscreen" hidden></iframe>
+          <div class="model-placeholder" id="viewer-placeholder" aria-label="Área del visor 3D">
             <div class="wire-model"><i></i><i></i><i></i><i></i><i></i><i></i></div>
             <p>Visor 3D de Trimble Connect</p>
-            <span>El componente oficial se cargará con el Project ID seleccionado.</span>
+            <span id="viewer-message">Preparando el proyecto seleccionado…</span>
           </div>
         </div>
         <div class="viewer-footer"><span><i></i> Trimble Connect</span><span>Archivo original .SKP</span></div>
       </section>
     </main>
   </div>
+  <script src="/vendor/trimbleconnect.workspace.api.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
