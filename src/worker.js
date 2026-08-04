@@ -7,6 +7,26 @@ function id() { return crypto.randomUUID(); }
 function configured(env) { return Boolean(env.TRIMBLE_CLIENT_ID && env.TRIMBLE_APP_NAME && env.TRIMBLE_CALLBACK_URL); }
 function getSession(request) { return sessions.get(parseCookies(request.headers.get('cookie')).m3d_session); }
 
+async function refreshTrimbleSession(session, env) {
+  if (!session?.refreshToken || !env.TRIMBLE_CLIENT_SECRET) return session;
+  if (session.expiresAt && session.expiresAt > Date.now() + 120000) return session;
+  const credentials = btoa(`${env.TRIMBLE_CLIENT_ID}:${env.TRIMBLE_CLIENT_SECRET}`);
+  const response = await fetch(`${TRIMBLE_ID_BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { authorization: `Basic ${credentials}`, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: session.refreshToken })
+  });
+  if (!response.ok) return null;
+  const tokens = await response.json();
+  Object.assign(session, {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token || session.refreshToken,
+    expiresIn: Number(tokens.expires_in || 3600),
+    expiresAt: Date.now() + Number(tokens.expires_in || 3600) * 1000
+  });
+  return session;
+}
+
 async function validateLicense(body, env) {
   if (!body.email || !body.licenseKey) return { valid: false, message: 'Correo y licencia son obligatorios.' };
   if (env.LICENSE_SERVER_URL) {
@@ -50,15 +70,21 @@ async function api(request, env) {
     const tokenResponse = await fetch(`${TRIMBLE_ID_BASE}/oauth/token`, { method: 'POST', headers: { authorization: `Basic ${credentials}`, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, client_id: env.TRIMBLE_CLIENT_ID, redirect_uri: env.TRIMBLE_CALLBACK_URL }) });
     if (!tokenResponse.ok) return Response.redirect(new URL('/?error=oauth_token', url), 302);
     const tokens = await tokenResponse.json();
-    const sessionId = id(); sessions.set(sessionId, { ...oauthStates.get(state).session, accessToken: tokens.access_token, refreshToken: tokens.refresh_token, idToken: tokens.id_token }); oauthStates.delete(state);
+    const expiresIn = Number(tokens.expires_in || 3600);
+    const sessionId = id(); sessions.set(sessionId, { ...oauthStates.get(state).session, accessToken: tokens.access_token, refreshToken: tokens.refresh_token, idToken: tokens.id_token, expiresIn, expiresAt: Date.now() + expiresIn * 1000 }); oauthStates.delete(state);
     return new Response(null, { status: 302, headers: { location: '/?connected=1', 'set-cookie': sessionCookie(sessionId, 86400) } });
   }
   if (url.pathname === '/api/projects') {
-    const session = getSession(request);
+    const session = await refreshTrimbleSession(getSession(request), env);
     if (!session?.accessToken) return json({ error: 'trimble_required' }, 401);
     const response = await fetch(`${trimbleApiBase(env.TRIMBLE_REGION)}/tc/api/2.0/projects?fullyLoaded=false`, { headers: { authorization: `Bearer ${session.accessToken}`, accept: 'application/json' } });
     if (!response.ok) return json({ error: 'trimble_projects', status: response.status }, 502);
     return json(await response.json());
+  }
+  if (url.pathname === '/api/trimble/embed-session') {
+    const session = await refreshTrimbleSession(getSession(request), env);
+    if (!session?.accessToken) return json({ error: 'trimble_required' }, 401);
+    return json({ accessToken: session.accessToken, expiresIn: session.expiresIn || 3600, region: env.TRIMBLE_REGION || 'us' }, 200, { 'cache-control': 'no-store' });
   }
   if (url.pathname === '/api/session') {
     const session = getSession(request);
