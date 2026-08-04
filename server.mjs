@@ -24,4 +24,4 @@ createServer(async (req, res) => {
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
   } catch (error) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'server_error', message: error.message })); }
-}).listen(Number(env.PORT || 3000), '0.0.0.0', () => console.log(`MODURAL-3D VIEW running on port ${env.PORT || 3000}`));
+}).listen(Number(env.PORT || 3000), '0.0.0.0', () => console.log(`MODULAR-3D VIEW running on port ${env.PORT || 3000}`));
