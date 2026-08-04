@@ -28,12 +28,12 @@ export function parseCookies(header = '') {
   }));
 }
 
-export function sessionCookie(value, maxAge = 3600) {
-  return `m3d_session=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+export function sessionCookie(value, maxAge = 3600, secure = true) {
+  return `m3d_session=${encodeURIComponent(value)}; Path=/; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Lax; Max-Age=${maxAge}`;
 }
 
-export function oauthStateCookie(value) {
-  return `m3d_oauth_state=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`;
+export function oauthStateCookie(value, secure = true) {
+  return `m3d_oauth_state=${encodeURIComponent(value)}; Path=/; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Lax; Max-Age=600`;
 }
 
 export function buildTrimbleAuthorizeUrl(env, state, prompt = 'login') {
