@@ -1,0 +1,17 @@
+{
+  "name": "modural-3d-view",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test",
+    "check": "node --check server.mjs && node --check src/worker.js && node --check public/app.js",
+    "deploy:cloudflare": "wrangler deploy",
+    "deploy:cloudflare:dry": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.28.1"
+  }
+}
