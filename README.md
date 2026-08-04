@@ -1,5 +1,7 @@
 # MODURAL-3D VIEW
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/VLADIMIR1991-05/MODURAL-3D-VIEW)
+
 Aplicación web para validar licencias de MODURAL-3D VIEW y conectar cada usuario con sus proyectos de SketchUp almacenados en Trimble Connect.
 
 ## Flujo
@@ -25,7 +27,6 @@ ALLOW_DEMO_LICENSE=true DEMO_LICENSE_KEY=M3D-VIEW-2026-DEMO APP_BASE_URL=http://
 
 ## Variables privadas
 
-- `SESSION_SECRET`: valor aleatorio largo.
 - `LICENSE_SERVER_URL`: endpoint del servidor de licencias Modular-3D.
 - `LICENSE_SERVER_TOKEN`: token opcional del servidor de licencias.
 - `TRIMBLE_CLIENT_ID`: Consumer Key entregada por Trimble.
@@ -44,7 +45,6 @@ npx wrangler secret put TRIMBLE_CLIENT_ID
 npx wrangler secret put TRIMBLE_CLIENT_SECRET
 npx wrangler secret put TRIMBLE_APP_NAME
 npx wrangler secret put TRIMBLE_CALLBACK_URL
-npx wrangler secret put SESSION_SECRET
 npx wrangler kv namespace create SESSIONS
 npx wrangler deploy
 ```
