@@ -11,10 +11,10 @@ test('safeEqual compares complete values', () => {
 test('parses cookies', () => assert.deepEqual(parseCookies('a=1; m3d_session=abc'), { a: '1', m3d_session: 'abc' }));
 
 test('builds the Trimble authorization request', () => {
-  const url = new URL(buildTrimbleAuthorizeUrl({ TRIMBLE_CLIENT_ID: 'client', TRIMBLE_APP_NAME: 'modural3d', TRIMBLE_CALLBACK_URL: 'https://example.com/api/trimble/callback' }, 'state'));
+  const url = new URL(buildTrimbleAuthorizeUrl({ TRIMBLE_CLIENT_ID: 'client', TRIMBLE_APP_NAME: 'modular3d', TRIMBLE_CALLBACK_URL: 'https://example.com/api/trimble/callback' }, 'state'));
   assert.equal(url.origin, 'https://id.trimble.com');
   assert.equal(url.searchParams.get('client_id'), 'client');
-  assert.equal(url.searchParams.get('scope'), 'openid modural3d');
+  assert.equal(url.searchParams.get('scope'), 'openid modular3d');
   assert.equal(url.searchParams.get('state'), 'state');
 });
 
