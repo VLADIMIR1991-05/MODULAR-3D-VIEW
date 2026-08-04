@@ -35,7 +35,7 @@ ALLOW_DEMO_LICENSE=true DEMO_LICENSE_KEY=M3D-VIEW-2026-DEMO APP_BASE_URL=http://
 - `TRIMBLE_CALLBACK_URL`: URL exacta registrada, por ejemplo `https://dominio/api/trimble/callback`.
 - `TRIMBLE_REGION`: `us`, `eu` o `asia`.
 
-En Cloudflare configura además un namespace KV con el binding `SESSIONS`. Esto mantiene licencias, estados OAuth y tokens disponibles entre distintas instancias del Worker.
+El despliegue principal utiliza `MODULAR_3D_SESSIONS` con el binding `SESSIONS`. Esto mantiene licencias, estados OAuth y tokens disponibles entre distintas instancias del Worker.
 
 ## Cloudflare
 
@@ -45,11 +45,10 @@ npx wrangler secret put TRIMBLE_CLIENT_ID
 npx wrangler secret put TRIMBLE_CLIENT_SECRET
 npx wrangler secret put TRIMBLE_APP_NAME
 npx wrangler secret put TRIMBLE_CALLBACK_URL
-npx wrangler kv namespace create SESSIONS
 npx wrangler deploy
 ```
 
-Después de crear KV, agrega el `id` recibido en `wrangler.jsonc` bajo `kv_namespaces` con el binding `SESSIONS`. Sin KV, la aplicación utiliza memoria únicamente para desarrollo local.
+La instancia principal está publicada en `https://modular-3d-view.lenin19910527.workers.dev`. Para desplegar una copia en otra cuenta se debe crear su propio KV y reemplazar el `id` de `kv_namespaces`.
 
 ## Render
 
