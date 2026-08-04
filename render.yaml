@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: modural-3d-view
+    name: modular-3d-view
     runtime: node
     plan: free
     buildCommand: npm install
