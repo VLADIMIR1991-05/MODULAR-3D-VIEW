@@ -34,10 +34,35 @@ function renderProjects(projects) {
   });
 }
 
-function openViewer(project) {
+async function openViewer(project) {
   $('#viewer-title').textContent = project.name;
   $('#viewer-stage').dataset.projectId = project.id;
   show('viewer');
+  await loadTrimbleViewer(project.id);
+}
+
+async function loadTrimbleViewer(projectId) {
+  const frame = $('#connect-frame');
+  const placeholder = $('#viewer-placeholder');
+  const message = $('#viewer-message');
+  message.textContent = 'Conectando con el visor oficial de Trimble…';
+  placeholder.hidden = false;
+  frame.hidden = true;
+  try {
+    if (!window.TrimbleConnectWorkspace) throw new Error('No se cargó la API de Trimble Connect.');
+    const session = await request('/api/trimble/embed-session');
+    frame.src = window.TrimbleConnectWorkspace.getConnectEmbedUrl('prod');
+    const api = await window.TrimbleConnectWorkspace.connect(frame, (event) => {
+      if (event === 'embed.pageLoaded') { frame.hidden = false; placeholder.hidden = true; }
+      if (event === 'embed.session.invalid') message.textContent = 'La sesión de Trimble expiró. Vuelve a conectarla.';
+    }, 30000);
+    await api.embed.setTokens({ accessToken: session.accessToken, expiresIn: session.expiresIn });
+    await api.embed.init3DViewer({ projectId });
+    frame.hidden = false;
+    placeholder.hidden = true;
+  } catch (error) {
+    message.textContent = error.message || 'No se pudo iniciar el visor 3D.';
+  }
 }
 
 async function loadProjects() {
@@ -62,7 +87,7 @@ $('#license-form').addEventListener('submit', async event => {
   } catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 
-$('#back-projects').addEventListener('click', () => show('projects'));
+$('#back-projects').addEventListener('click', () => { $('#connect-frame').src = 'about:blank'; show('projects'); });
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }); show('license'); });
 
 const params = new URLSearchParams(location.search);
