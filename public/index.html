@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#121417">
+  <title>MODURAL-3D VIEW</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="MODURAL-3D VIEW"><span class="brand-cube">◇</span><span>MODURAL-3D VIEW</span></a>
+      <ol class="steps" aria-label="Etapas de acceso">
+        <li class="active" data-step="license"><span>1</span>Licencia</li>
+        <li data-step="trimble"><span>2</span>Trimble Connect</li>
+        <li data-step="projects"><span>3</span>Proyectos</li>
+        <li data-step="viewer"><span>4</span>Visualizador</li>
+      </ol>
+      <p class="sidebar-foot">Acceso protegido y conectado</p>
+    </aside>
+
+    <main>
+      <section class="screen active centered" id="license-screen">
+        <div class="hero-icon">⌁</div>
+        <p class="eyebrow">PLATAFORMA PROFESIONAL</p>
+        <h1>Acceso a MODURAL-3D VIEW</h1>
+        <p class="muted">Ingresa tu correo y licencia activa.</p>
+        <form id="license-form" class="form">
+          <label>Correo electrónico<input id="email" type="email" autocomplete="email" required placeholder="usuario@correo.com"></label>
+          <label>Código de licencia<input id="license-key" type="text" autocomplete="off" required placeholder="M3D-VIEW-XXXX-XXXX"></label>
+          <button class="primary" type="submit">Validar licencia</button>
+        </form>
+        <p class="message" id="license-message" role="status"></p>
+      </section>
+
+      <section class="screen centered" id="trimble-screen">
+        <span class="badge">LICENCIA ACTIVA</span>
+        <div class="license-summary"><span class="check">✓</span><div><strong>MODURAL-3D VIEW Profesional</strong><p class="muted">Acceso autorizado para este dispositivo</p></div></div>
+        <h1>Conecta tus proyectos</h1>
+        <p class="muted">Usa la misma cuenta de SketchUp o Trimble Connect.</p>
+        <div class="action-stack">
+          <a class="primary button" href="/api/trimble/login">Continuar con Trimble Connect</a>
+          <a class="secondary button" href="/api/trimble/login?prompt=create">Crear cuenta Trimble con correo</a>
+        </div>
+        <p class="security-note">Tu contraseña se introduce únicamente en la página oficial de Trimble.</p>
+      </section>
+
+      <section class="screen" id="projects-screen">
+        <header class="content-header"><div><p class="eyebrow">TRIMBLE CONNECT</p><h1>Mis proyectos</h1></div><button class="ghost" id="logout">Cerrar sesión</button></header>
+        <div class="profile"><span class="avatar">VP</span><div><strong id="profile-email">Usuario conectado</strong><p class="muted">Licencia y Trimble vinculados</p></div></div>
+        <div class="project-grid" id="project-grid"></div>
+        <p class="message" id="projects-message" role="status"></p>
+      </section>
+
+      <section class="screen viewer-screen" id="viewer-screen">
+        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><button class="secondary" id="back-projects">Proyectos</button></header>
+        <div class="viewer-stage" id="viewer-stage">
+          <div class="model-placeholder" aria-label="Área del visor 3D">
+            <div class="wire-model"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <p>Visor 3D de Trimble Connect</p>
+            <span>El componente oficial se cargará con el Project ID seleccionado.</span>
+          </div>
+        </div>
+        <div class="viewer-footer"><span><i></i> Trimble Connect</span><span>Archivo original .SKP</span></div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
