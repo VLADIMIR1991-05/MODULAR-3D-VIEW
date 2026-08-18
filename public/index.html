@@ -10,64 +10,45 @@
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <a class="brand" href="/" aria-label="MODULAR-3D VIEW"><span class="brand-cube">◇</span><span>MODULAR-3D VIEW</span></a>
-      <ol class="steps" aria-label="Etapas de acceso">
+      <a class="brand" href="/"><span class="brand-cube">◇</span><span>MODULAR-3D VIEW</span></a>
+      <ol class="steps">
         <li class="active" data-step="license"><span>1</span>Licencia</li>
-        <li data-step="trimble"><span>2</span>Trimble Connect</li>
-        <li data-step="projects"><span>3</span>Proyectos</li>
-        <li data-step="viewer"><span>4</span>Visualizador</li>
+        <li data-step="import"><span>2</span>Proyecto</li>
+        <li data-step="viewer"><span>3</span>Visualizador</li>
       </ol>
-      <p class="sidebar-foot">Acceso protegido y conectado</p>
+      <p class="sidebar-foot">Visor independiente de Trimble</p>
     </aside>
-
     <main>
       <section class="screen active centered" id="license-screen">
-        <div class="hero-icon">⌁</div>
-        <p class="eyebrow">PLATAFORMA PROFESIONAL</p>
-        <h1>Acceso a MODULAR-3D VIEW</h1>
-        <p class="muted">Ingresa tu correo y licencia activa.</p>
+        <div class="hero-icon">⌁</div><p class="eyebrow">PLATAFORMA PROFESIONAL</p>
+        <h1>Acceso a MODULAR-3D VIEW</h1><p class="muted">Ingresa tu correo y licencia activa.</p>
         <form id="license-form" class="form">
-          <label>Correo electrónico<input id="email" type="email" autocomplete="email" required placeholder="usuario@correo.com"></label>
-          <label>Código de licencia<input id="license-key" type="text" autocomplete="off" required placeholder="M3D-VIEW-XXXX-XXXX"></label>
+          <label>Correo electrónico<input id="email" type="email" required placeholder="usuario@correo.com"></label>
+          <label>Código de licencia<input id="license-key" type="text" required placeholder="M3D-VIEW-XXXX-XXXX"></label>
           <button class="primary" type="submit">Validar licencia</button>
         </form>
         <p class="message" id="license-message" role="status"></p>
       </section>
-
-      <section class="screen centered" id="trimble-screen">
-        <span class="badge">LICENCIA ACTIVA</span>
-        <div class="license-summary"><span class="check">✓</span><div><strong>MODULAR-3D VIEW Profesional</strong><p class="muted">Acceso autorizado para este dispositivo</p></div></div>
-        <h1>Conecta tus proyectos</h1>
-        <p class="muted">Usa la misma cuenta de SketchUp o Trimble Connect.</p>
-        <div class="action-stack">
-          <a class="primary button" href="/api/trimble/login">Continuar con Trimble Connect</a>
-          <a class="secondary button" href="/api/trimble/login?prompt=create">Crear cuenta Trimble con correo</a>
+      <section class="screen" id="import-screen">
+        <header class="content-header"><div><p class="eyebrow">LICENCIA ACTIVA</p><h1>Mis proyectos</h1></div><button class="ghost" id="logout">Cerrar sesión</button></header>
+        <div class="profile"><span class="avatar">M3</span><div><strong id="profile-email">Usuario autorizado</strong><p class="muted">Visor local seguro</p></div></div>
+        <div class="upload-zone" id="drop-zone">
+          <span class="upload-icon">◇</span><h2>Abre tu modelo 3D</h2>
+          <p>Arrastra un archivo aquí o selecciónalo desde tu equipo.</p>
+          <label class="primary button" for="model-file">Seleccionar modelo</label>
+          <input id="model-file" type="file" accept=".glb,.gltf" hidden>
+          <small>Formatos actuales: GLB y GLTF · Máximo local: 250 MB</small>
         </div>
-        <p class="security-note">Tu contraseña se introduce únicamente en la página oficial de Trimble.</p>
+        <div class="notice-card"><strong>Automatización de SketchUp</strong><p>La extensión MODULAR-3D preparará la versión web sin modificar el .SKP original.</p></div>
+        <p class="message" id="import-message" role="status"></p>
       </section>
-
-      <section class="screen" id="projects-screen">
-        <header class="content-header"><div><p class="eyebrow">TRIMBLE CONNECT</p><h1>Mis proyectos</h1></div><button class="ghost" id="logout">Cerrar sesión</button></header>
-        <div class="profile"><span class="avatar">VP</span><div><strong id="profile-email">Usuario conectado</strong><p class="muted">Licencia y Trimble vinculados</p></div></div>
-        <div class="project-grid" id="project-grid"></div>
-        <p class="message" id="projects-message" role="status"></p>
-      </section>
-
       <section class="screen viewer-screen" id="viewer-screen">
-        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><button class="secondary" id="back-projects">Proyectos</button></header>
-        <div class="viewer-stage" id="viewer-stage">
-          <iframe id="connect-frame" title="Visor 3D de Trimble Connect" allow="fullscreen" hidden></iframe>
-          <div class="model-placeholder" id="viewer-placeholder" aria-label="Área del visor 3D">
-            <div class="wire-model"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <p>Visor 3D de Trimble Connect</p>
-            <span id="viewer-message">Preparando el proyecto seleccionado…</span>
-          </div>
-        </div>
-        <div class="viewer-footer"><span><i></i> Trimble Connect</span><span>Archivo original .SKP</span></div>
+        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><div class="viewer-actions"><button class="ghost" id="fit-model">Encuadrar</button><button class="secondary" id="back-import">Proyectos</button></div></header>
+        <div class="viewer-stage own-viewer" id="viewer-stage" aria-label="Visor 3D interactivo"></div>
+        <div class="viewer-footer"><span><i></i> MODULAR-3D VIEW</span><span id="viewer-message">Arrastra para orbitar · rueda para zoom</span></div>
       </section>
     </main>
   </div>
-  <script src="/vendor/trimbleconnect.workspace.api.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
