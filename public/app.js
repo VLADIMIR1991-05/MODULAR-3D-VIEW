@@ -182,13 +182,15 @@ function initializeNavigator() {
   face.addEventListener('pointerdown', event => {
     navigatorDragging = false;
     previous = { x: event.clientX, y: event.clientY };
-    face.setPointerCapture(event.pointerId);
   });
   face.addEventListener('pointermove', event => {
     if (!previous) return;
     const dx = event.clientX - previous.x;
     const dy = event.clientY - previous.y;
-    if (Math.abs(dx) + Math.abs(dy) > 2) navigatorDragging = true;
+    if (Math.abs(dx) + Math.abs(dy) > 2 && !navigatorDragging) {
+      navigatorDragging = true;
+      face.setPointerCapture(event.pointerId);
+    }
     if (navigatorDragging) {
       if (Math.abs(dx) >= 1) orbitStep(dx > 0 ? 'right' : 'left', Math.abs(dx) * .008, 0);
       if (Math.abs(dy) >= 1) orbitStep(dy > 0 ? 'down' : 'up', Math.abs(dy) * .008, 0);
