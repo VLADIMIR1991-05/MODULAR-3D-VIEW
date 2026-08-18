@@ -62,7 +62,7 @@ function frameModel() {
   const size = box.getSize(new THREE.Vector3());
   const distance = Math.max(size.x, size.y, size.z, 1) * 1.8;
   controls.target.copy(center);
-  camera.position.copy(center).add(new THREE.Vector3(distance, distance * 0.65, distance));
+  camera.position.copy(center).add(new THREE.Vector3(distance, distance * 0.65, -distance));
   camera.near = Math.max(distance / 1000, 0.01);
   camera.far = distance * 100;
   camera.updateProjectionMatrix();
@@ -134,12 +134,12 @@ function initializeNavigator() {
   const navigator = $('#view-navigator');
   const cube = $('#nav-cube');
   const faces = [
-    { name: 'front', label: 'FRENTE', normal: [0, 0, 1], horizontal: [1, 0, 0], vertical: [0, 1, 0] },
-    { name: 'back', label: 'ATRÁS', normal: [0, 0, -1], horizontal: [-1, 0, 0], vertical: [0, 1, 0] },
+    { name: 'front', label: 'FRENTE', normal: [0, 0, -1], horizontal: [-1, 0, 0], vertical: [0, 1, 0] },
+    { name: 'back', label: 'ATRÁS', normal: [0, 0, 1], horizontal: [1, 0, 0], vertical: [0, 1, 0] },
     { name: 'right', label: 'DERECHA', normal: [1, 0, 0], horizontal: [0, 0, -1], vertical: [0, 1, 0] },
     { name: 'left', label: 'IZQUIERDA', normal: [-1, 0, 0], horizontal: [0, 0, 1], vertical: [0, 1, 0] },
-    { name: 'top', label: 'ARRIBA', normal: [0, 1, 0], horizontal: [1, 0, 0], vertical: [0, 0, -1] },
-    { name: 'bottom', label: 'ABAJO', normal: [0, -1, 0], horizontal: [1, 0, 0], vertical: [0, 0, 1] }
+    { name: 'top', label: 'ARRIBA', normal: [0, 1, 0], horizontal: [1, 0, 0], vertical: [0, 0, 1] },
+    { name: 'bottom', label: 'ABAJO', normal: [0, -1, 0], horizontal: [1, 0, 0], vertical: [0, 0, -1] }
   ];
   const rows = [1, 0, -1];
   const columns = [-1, 0, 1];
@@ -152,6 +152,7 @@ function initializeNavigator() {
         .addScaledVector(new THREE.Vector3(...face.vertical), row);
       const button = document.createElement('button');
       button.dataset.view = direction.toArray().join(',');
+      button.dataset.group = direction.toArray().map(value => Math.sign(value)).join(',');
       button.title = row === 0 && column === 0 ? `Vista ${face.label.toLowerCase()}` : `Vista diagonal desde ${face.label.toLowerCase()}`;
       if (rowIndex === 1 && columnIndex === 1) {
         button.className = 'nav-center';
@@ -162,6 +163,12 @@ function initializeNavigator() {
     cube.appendChild(element);
   });
   navigator.querySelectorAll('[data-view]').forEach(button => {
+    button.addEventListener('pointerenter', () => {
+      navigator.querySelectorAll(`[data-group="${button.dataset.group}"]`).forEach(item => item.classList.add('linked'));
+    });
+    button.addEventListener('pointerleave', () => {
+      navigator.querySelectorAll(`[data-group="${button.dataset.group}"]`).forEach(item => item.classList.remove('linked'));
+    });
     button.addEventListener('click', event => {
       if (navigatorDragging) return;
       const [x, y, z] = event.currentTarget.dataset.view.split(',').map(Number);
@@ -169,7 +176,7 @@ function initializeNavigator() {
     });
   });
   navigator.querySelectorAll('[data-orbit]').forEach(button => button.addEventListener('click', () => orbitStep(button.dataset.orbit)));
-  $('#nav-home').addEventListener('click', () => moveCameraTo(new THREE.Vector3(1, .65, 1)));
+  $('#nav-home').addEventListener('click', () => moveCameraTo(new THREE.Vector3(1, .65, -1)));
   const face = $('#nav-face');
   let previous = null;
   face.addEventListener('pointerdown', event => {
