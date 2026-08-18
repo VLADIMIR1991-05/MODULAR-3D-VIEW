@@ -1,6 +1,6 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
-import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js';
+import * as THREE from 'https://esm.sh/three@0.180.0';
+import { OrbitControls } from 'https://esm.sh/three@0.180.0/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js';
 
 const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
@@ -8,7 +8,6 @@ let objectUrl, renderer, scene, camera, controls, model;
 
 function show(name) {
   screens.forEach(item => {
-    `#${item}-screen`;
     $(`#${item}-screen`).classList.toggle('active', item === name);
     document.querySelector(`[data-step="${item}"]`).classList.toggle('active', item === name);
   });
