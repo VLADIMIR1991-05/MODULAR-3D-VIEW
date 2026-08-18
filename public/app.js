@@ -5,9 +5,15 @@ import { ColladaLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders
 
 const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
-let objectUrl, renderer, scene, camera, controls, model;
+let objectUrl, renderer, scene, camera, controls, model, gridHelper;
 let currentFiles = [];
 let navigatorDragging = false;
+let cameraMoveToken = 0;
+let frontOffset = Number(localStorage.getItem('m3d-front-offset') || 0);
+let darkBackground = true;
+let measureMode = false;
+let measurePoints = [];
+let measurementObjects = [];
 
 function show(name) {
   screens.forEach(item => {
@@ -30,33 +36,43 @@ function initializeViewer() {
   scene.background = new THREE.Color(0x111417);
   camera = new THREE.PerspectiveCamera(45, stage.clientWidth / stage.clientHeight, 0.01, 100000);
   camera.position.set(6, 4, 7);
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(stage.clientWidth, stage.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   stage.prepend(renderer.domElement);
+  renderer.domElement.addEventListener('pointerdown', handleMeasurementClick);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.addEventListener('change', updateNavigator);
+  controls.addEventListener('start', () => renderer.setPixelRatio(1));
+  controls.addEventListener('end', () => renderer.setPixelRatio(Math.min(devicePixelRatio, 2)));
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 2.5));
   const sun = new THREE.DirectionalLight(0xffffff, 3);
   sun.position.set(8, 12, 6);
-  scene.add(sun, new THREE.GridHelper(40, 40, 0x52606d, 0x2a323a));
+  gridHelper = new THREE.GridHelper(40, 40, 0x52606d, 0x2a323a);
+  scene.add(sun, gridHelper);
   new ResizeObserver(() => {
-    camera.aspect = stage.clientWidth / stage.clientHeight;
+    const aspect = stage.clientWidth / stage.clientHeight;
+    if (camera.isPerspectiveCamera) camera.aspect = aspect;
+    if (camera.isOrthographicCamera) {
+      const half = (camera.top - camera.bottom) / 2;
+      camera.left = -half * aspect;
+      camera.right = half * aspect;
+    }
     camera.updateProjectionMatrix();
     renderer.setSize(stage.clientWidth, stage.clientHeight, false);
   }).observe(stage);
-  (function animate() {
+  renderer.setAnimationLoop(() => {
     controls.update();
     renderer.render(scene, camera);
-    requestAnimationFrame(animate);
-  }());
+  });
 }
 
 function frameModel() {
   if (!model) return;
+  switchProjection('perspective');
   const box = new THREE.Box3().setFromObject(model);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
@@ -73,8 +89,74 @@ function modelCenter() {
   return model ? new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3()) : controls.target.clone();
 }
 
+function modelMaximumSize() {
+  if (!model) return 10;
+  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  return Math.max(size.x, size.y, size.z, 1);
+}
+
+function switchProjection(mode) {
+  if (!camera || !controls) return;
+  if ((mode === 'orthographic' && camera.isOrthographicCamera) || (mode === 'perspective' && camera.isPerspectiveCamera)) return;
+  const stage = $('#viewer-stage');
+  const aspect = stage.clientWidth / stage.clientHeight;
+  const position = camera.position.clone();
+  const up = camera.up.clone();
+  const distance = Math.max(position.distanceTo(controls.target), 1);
+  if (mode === 'orthographic') {
+    const half = modelMaximumSize() * .62;
+    camera = new THREE.OrthographicCamera(-half * aspect, half * aspect, half, -half, Math.max(distance / 1000, .01), distance * 100);
+  } else {
+    camera = new THREE.PerspectiveCamera(45, aspect, Math.max(distance / 1000, .01), distance * 100);
+  }
+  camera.position.copy(position);
+  camera.up.copy(up);
+  camera.lookAt(controls.target);
+  controls.object = camera;
+  controls.update();
+  $('#projection-toggle').textContent = camera.isOrthographicCamera ? 'Ortogonal' : 'Perspectiva';
+  $('#projection-toggle').classList.toggle('active', camera.isOrthographicCamera);
+}
+
+function calibratedDirection(direction) {
+  return direction.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), frontOffset);
+}
+
+function clearMeasurement() {
+  measurementObjects.forEach(object => scene.remove(object));
+  measurementObjects = [];
+  measurePoints = [];
+}
+
+function handleMeasurementClick(event) {
+  if (!measureMode || !model) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const pointer = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(model, true)[0];
+  if (!hit) return;
+  if (measurePoints.length === 2) clearMeasurement();
+  measurePoints.push(hit.point.clone());
+  const radius = modelMaximumSize() * .012;
+  const marker = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff6b1a }));
+  marker.position.copy(hit.point);
+  scene.add(marker);
+  measurementObjects.push(marker);
+  if (measurePoints.length === 2) {
+    const geometry = new THREE.BufferGeometry().setFromPoints(measurePoints);
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xff6b1a }));
+    scene.add(line);
+    measurementObjects.push(line);
+    $('#viewer-message').textContent = `Distancia: ${measurePoints[0].distanceTo(measurePoints[1]).toFixed(3)} unidades del modelo`;
+  } else $('#viewer-message').textContent = 'Selecciona el segundo punto de medición.';
+}
+
 function moveCameraTo(direction, duration = 360) {
   if (!camera || !controls) return;
+  const axisCount = [direction.x, direction.y, direction.z].filter(value => Math.abs(value) > .001).length;
+  switchProjection(axisCount === 1 ? 'orthographic' : 'perspective');
+  const moveToken = ++cameraMoveToken;
   const target = modelCenter();
   const distance = Math.max(camera.position.distanceTo(controls.target), 1);
   const end = target.clone().add(direction.clone().normalize().multiplyScalar(distance));
@@ -90,6 +172,7 @@ function moveCameraTo(direction, duration = 360) {
   const startTarget = controls.target.clone();
   const began = performance.now();
   const animateMove = now => {
+    if (moveToken !== cameraMoveToken) return;
     const progress = Math.min((now - began) / duration, 1);
     const eased = 1 - Math.pow(1 - progress, 3);
     camera.position.lerpVectors(start, end, eased);
@@ -121,11 +204,12 @@ function orbitStep(action, angle = Math.PI / 4, duration = 360) {
 function updateNavigator() {
   if (!camera || !controls) return;
   const direction = currentViewDirection();
-  const yaw = THREE.MathUtils.radToDeg(Math.atan2(direction.x, direction.z));
-  const pitch = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1)));
+  const displayDirection = direction.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -frontOffset);
+  const yaw = THREE.MathUtils.radToDeg(Math.atan2(displayDirection.x, displayDirection.z));
+  const pitch = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(displayDirection.y, -1, 1)));
   $('#nav-cube').style.transform = `rotateX(${pitch}deg) rotateY(${-yaw}deg)`;
   document.querySelectorAll('.nav-cube-face [data-view]').forEach(button => {
-    const candidate = new THREE.Vector3(...button.dataset.view.split(',').map(Number)).normalize();
+    const candidate = calibratedDirection(new THREE.Vector3(...button.dataset.view.split(',').map(Number))).normalize();
     button.classList.toggle('active', candidate.dot(direction) > .995);
   });
 }
@@ -172,11 +256,11 @@ function initializeNavigator() {
     button.addEventListener('click', event => {
       if (navigatorDragging) return;
       const [x, y, z] = event.currentTarget.dataset.view.split(',').map(Number);
-      moveCameraTo(new THREE.Vector3(x, y, z));
+      moveCameraTo(calibratedDirection(new THREE.Vector3(x, y, z)));
     });
   });
   navigator.querySelectorAll('[data-orbit]').forEach(button => button.addEventListener('click', () => orbitStep(button.dataset.orbit)));
-  $('#nav-home').addEventListener('click', () => moveCameraTo(new THREE.Vector3(1, .65, -1)));
+  $('#nav-home').addEventListener('click', () => moveCameraTo(calibratedDirection(new THREE.Vector3(1, .65, -1))));
   const face = $('#nav-face');
   let previous = null;
   face.addEventListener('pointerdown', event => {
@@ -264,16 +348,26 @@ async function loadSharedModel() {
   show('viewer');
   initializeViewer();
   $('#publish-mobile').hidden = true;
+  $('#share-expiry').hidden = true;
+  $('#share-password').hidden = true;
   $('#back-import').hidden = true;
   $('#viewer-message').textContent = 'Descargando proyecto compartido…';
-  const manifest = await request(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}`);
+  let password = '';
+  let manifestResponse = await fetch(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}`);
+  if (manifestResponse.status === 401) {
+    password = prompt('Este proyecto está protegido. Ingresa la contraseña:') || '';
+    manifestResponse = await fetch(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}&password=${encodeURIComponent(password)}`);
+  }
+  const manifest = await manifestResponse.json().catch(() => ({}));
+  if (!manifestResponse.ok) throw new Error(manifest.message || 'No se pudo abrir el proyecto compartido.');
+  const accessQuery = `token=${encodeURIComponent(token)}${password ? `&password=${encodeURIComponent(password)}` : ''}`;
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(url => {
     const clean = decodeURIComponent(url).replace(/^\.\//, '');
     const path = manifest.files.find(file => file === clean || file.split('/').pop() === clean.split('/').pop());
-    return path ? `/api/shared/${manifest.id}/file/${path.split('/').map(encodeURIComponent).join('/')}?token=${encodeURIComponent(token)}` : url;
+    return path ? `/api/shared/${manifest.id}/file/${path.split('/').map(encodeURIComponent).join('/')}?${accessQuery}` : url;
   });
-  const entryUrl = `/api/shared/${manifest.id}/file/${manifest.entry.split('/').map(encodeURIComponent).join('/')}?token=${encodeURIComponent(token)}`;
+  const entryUrl = `/api/shared/${manifest.id}/file/${manifest.entry.split('/').map(encodeURIComponent).join('/')}?${accessQuery}`;
   const response = await fetch(entryUrl);
   if (!response.ok) throw new Error('No se pudo descargar el modelo compartido.');
   const collada = new ColladaLoader(manager).parse(await response.text(), '');
@@ -285,23 +379,69 @@ async function loadSharedModel() {
   return true;
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  return `${(value / 1024 ** 3).toFixed(2)} GB`;
+}
+
+async function copyText(value) {
+  if (navigator.clipboard) return navigator.clipboard.writeText(value);
+  const input = document.createElement('textarea');
+  input.value = value;
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand('copy');
+  input.remove();
+}
+
+async function loadPublishedProjects() {
+  const list = $('#published-list');
+  try {
+    const data = await request('/api/models');
+    const storage = data.storage;
+    const percent = Math.min(storage.percent, 100);
+    $('#storage-percent').textContent = `${percent.toFixed(2)}%`;
+    $('#storage-text').textContent = `${formatBytes(storage.usedBytes)} utilizados · límite preventivo ${formatBytes(storage.safeLimitBytes)} · nivel gratuito ${formatBytes(storage.freeBytes)}`;
+    $('#storage-bar').style.width = `${percent}%`;
+    $('#storage-bar').style.background = percent >= 90 ? '#c53f24' : percent >= 80 ? '#e79b25' : '#45a96b';
+    $('#storage-alert').hidden = !storage.warning;
+    $('#storage-alert').textContent = storage.usedBytes >= storage.safeLimitBytes
+      ? 'Publicación bloqueada: elimina proyectos para mantenerte por debajo de 9 GB.'
+      : 'Advertencia: superaste 8 GB. Conviene eliminar proyectos antiguos antes de seguir publicando.';
+    if (!data.models.length) {
+      list.innerHTML = '<p class="muted">Todavía no hay proyectos publicados.</p>';
+      return;
+    }
+    list.innerHTML = data.models.map(item => {
+      const expiration = item.expiresAt ? new Date(item.expiresAt).toLocaleDateString('es-EC') : 'Sin vencimiento';
+      return `<article class="published-card" data-model-id="${item.id}"><div><strong class="project-name">${item.name.replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))}</strong><small>${formatBytes(item.sizeBytes)} · publicado ${new Date(item.createdAt).toLocaleDateString('es-EC')} · vence ${expiration} · ${item.active ? 'Activo' : 'Desactivado'}</small></div><div class="project-actions"><button data-action="copy" data-url="${item.url}">Copiar enlace</button><button data-action="rename">Renombrar</button><button data-action="token">Renovar enlace</button><button data-action="toggle" data-active="${item.active}">${item.active ? 'Desactivar' : 'Activar'}</button><button class="danger" data-action="delete">Eliminar</button></div></article>`;
+    }).join('');
+  } catch (error) {
+    list.innerHTML = `<p class="message error">${error.message}</p>`;
+  }
+}
+
 async function publishForMobile() {
   if (!currentFiles.length) throw new Error('Abre primero una exportación de SketchUp.');
   const button = $('#publish-mobile');
   button.disabled = true;
   const original = button.textContent;
+  let created;
   try {
     const dae = currentFiles.find(file => file.name.toLowerCase().endsWith('.dae'));
-    const created = await request('/api/models/init', {
+    const totalSize = currentFiles.reduce((total, file) => total + file.size, 0);
+    created = await request('/api/models/init', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: dae ? dae.name.replace(/\.dae$/i, '') : 'Proyecto' })
+      body: JSON.stringify({ name: dae ? dae.name.replace(/\.dae$/i, '') : 'Proyecto', totalSize, expiresDays: Number($('#share-expiry').value), password: $('#share-password').value })
     });
     const paths = [];
     for (let index = 0; index < currentFiles.length; index += 1) {
       const file = currentFiles[index];
       const path = (file.webkitRelativePath || file.name).split('/').slice(1).join('/') || file.name;
-      paths.push(path);
+      paths.push({ path, size: file.size });
       button.textContent = `Subiendo ${index + 1} de ${currentFiles.length}…`;
       const response = await fetch(`/api/models/${created.id}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
         method: 'PUT',
@@ -317,6 +457,10 @@ async function publishForMobile() {
     });
     $('#share-url').value = result.url;
     $('#share-panel').hidden = false;
+    await loadPublishedProjects();
+  } catch (error) {
+    if (created?.id) await request(`/api/models/${created.id}`, { method: 'DELETE' }).catch(() => {});
+    throw error;
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -337,6 +481,7 @@ $('#license-form').addEventListener('submit', async event => {
     message.textContent = result.message;
     $('#profile-email').textContent = $('#email').value.trim();
     show('import');
+    await loadPublishedProjects();
   } catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 
@@ -364,11 +509,87 @@ $('#publish-mobile').addEventListener('click', () => publishForMobile().catch(er
   $('#viewer-message').textContent = error.message;
 }));
 $('#copy-link').addEventListener('click', async () => {
-  await navigator.clipboard.writeText($('#share-url').value);
+  await copyText($('#share-url').value);
   $('#copy-link').textContent = 'Copiado';
   setTimeout(() => { $('#copy-link').textContent = 'Copiar enlace'; }, 1600);
 });
-$('#back-import').addEventListener('click', () => show('import'));
+$('#back-import').addEventListener('click', () => { show('import'); loadPublishedProjects(); });
+$('#refresh-projects').addEventListener('click', loadPublishedProjects);
+$('#published-list').addEventListener('click', async event => {
+  const button = event.target.closest('[data-action]');
+  const card = event.target.closest('[data-model-id]');
+  if (!button || !card) return;
+  const id = card.dataset.modelId;
+  try {
+    if (button.dataset.action === 'copy') {
+      await copyText(button.dataset.url);
+      button.textContent = 'Copiado';
+      return;
+    }
+    if (button.dataset.action === 'delete') {
+      if (!confirm('¿Eliminar definitivamente este proyecto y todos sus archivos?')) return;
+      await request(`/api/models/${id}`, { method: 'DELETE' });
+    }
+    if (button.dataset.action === 'rename') {
+      const name = prompt('Nuevo nombre del proyecto:', card.querySelector('.project-name').textContent);
+      if (!name) return;
+      await request(`/api/models/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+    }
+    if (button.dataset.action === 'token') {
+      const result = await request(`/api/models/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ regenerateToken: true, active: true }) });
+      await copyText(result.url);
+      alert('Enlace nuevo copiado. El enlace anterior dejó de funcionar.');
+    }
+    if (button.dataset.action === 'toggle') {
+      await request(`/api/models/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ active: button.dataset.active !== 'true' }) });
+    }
+    await loadPublishedProjects();
+  } catch (error) { alert(error.message); }
+});
+$('#projection-toggle').addEventListener('click', () => switchProjection(camera?.isOrthographicCamera ? 'perspective' : 'orthographic'));
+$('#grid-toggle').addEventListener('click', event => {
+  gridHelper.visible = !gridHelper.visible;
+  event.currentTarget.classList.toggle('active', gridHelper.visible);
+});
+$('#shadow-toggle').addEventListener('click', event => {
+  renderer.shadowMap.enabled = !renderer.shadowMap.enabled;
+  if (model) model.traverse(item => { if (item.isMesh) { item.castShadow = renderer.shadowMap.enabled; item.receiveShadow = renderer.shadowMap.enabled; } });
+  event.currentTarget.classList.toggle('active', renderer.shadowMap.enabled);
+});
+$('#background-toggle').addEventListener('click', event => {
+  darkBackground = !darkBackground;
+  scene.background = new THREE.Color(darkBackground ? 0x111417 : 0xe8edf1);
+  event.currentTarget.classList.toggle('active', !darkBackground);
+});
+$('#fullscreen-toggle').addEventListener('click', async () => {
+  if (!document.fullscreenElement) await $('#viewer-stage').requestFullscreen(); else await document.exitFullscreen();
+});
+$('#capture-view').addEventListener('click', () => {
+  renderer.render(scene, camera);
+  const link = document.createElement('a');
+  link.download = `${$('#viewer-title').textContent || 'modelo'}-vista.png`;
+  link.href = renderer.domElement.toDataURL('image/png');
+  link.click();
+});
+$('#measure-toggle').addEventListener('click', event => {
+  measureMode = !measureMode;
+  event.currentTarget.classList.toggle('active', measureMode);
+  controls.enabled = !measureMode;
+  if (!measureMode) {
+    clearMeasurement();
+    $('#viewer-message').textContent = 'Arrastra para orbitar · rueda para zoom';
+  } else $('#viewer-message').textContent = 'Selecciona dos puntos sobre el modelo.';
+});
+$('#set-front').addEventListener('click', () => {
+  const direction = currentViewDirection();
+  direction.y = 0;
+  if (direction.lengthSq() < .01) return alert('Gira primero hacia una vista horizontal para definir el frente.');
+  direction.normalize();
+  frontOffset = Math.atan2(direction.x, direction.z) - Math.PI;
+  localStorage.setItem('m3d-front-offset', String(frontOffset));
+  updateNavigator();
+  alert('La orientación actual quedó definida como FRENTE para este navegador.');
+});
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }); show('license'); });
 initializeNavigator();
 loadSharedModel().catch(error => {
@@ -380,6 +601,7 @@ loadSharedModel().catch(error => {
     if (session.licensed) {
       $('#profile-email').textContent = session.email || 'Usuario autorizado';
       show('import');
+      loadPublishedProjects();
     }
   });
 }).catch(() => {});
