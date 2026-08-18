@@ -1,8 +1,14 @@
-const screens = ['license', 'trimble', 'projects', 'viewer'];
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js';
+
+const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
+let objectUrl, renderer, scene, camera, controls, model;
 
 function show(name) {
   screens.forEach(item => {
+    `#${item}-screen`;
     $(`#${item}-screen`).classList.toggle('active', item === name);
     document.querySelector(`[data-step="${item}"]`).classList.toggle('active', item === name);
   });
@@ -15,82 +21,108 @@ async function request(path, options) {
   return data;
 }
 
-function normalizeProjects(payload) {
-  const list = Array.isArray(payload) ? payload : payload.projects || payload.items || [];
-  return list.map(project => ({ id: project.id || project.projectId, name: project.name || project.title || 'Proyecto sin nombre', updated: project.modifiedOn || project.updatedAt || 'Disponible en Trimble Connect' })).filter(project => project.id);
+function initializeViewer() {
+  if (renderer) return;
+  const stage = $('#viewer-stage');
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111417);
+  camera = new THREE.PerspectiveCamera(45, stage.clientWidth / stage.clientHeight, 0.01, 100000);
+  camera.position.set(6, 4, 7);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(stage.clientWidth, stage.clientHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true;
+  stage.prepend(renderer.domElement);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 2.5));
+  const sun = new THREE.DirectionalLight(0xffffff, 3);
+  sun.position.set(8, 12, 6);
+  scene.add(sun, new THREE.GridHelper(40, 40, 0x52606d, 0x2a323a));
+  new ResizeObserver(() => {
+    camera.aspect = stage.clientWidth / stage.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(stage.clientWidth, stage.clientHeight, false);
+  }).observe(stage);
+  (function animate() {
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }());
 }
 
-function renderProjects(projects) {
-  const grid = $('#project-grid');
-  grid.replaceChildren();
-  projects.forEach(project => {
-    const button = document.createElement('button');
-    button.className = 'project-card';
-    button.innerHTML = `<span class="project-icon">◇</span><span><strong></strong><small></small></span><b>→</b>`;
-    button.querySelector('strong').textContent = project.name;
-    button.querySelector('small').textContent = project.updated;
-    button.addEventListener('click', () => openViewer(project));
-    grid.append(button);
-  });
+function frameModel() {
+  if (!model) return;
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const distance = Math.max(size.x, size.y, size.z, 1) * 1.8;
+  controls.target.copy(center);
+  camera.position.copy(center).add(new THREE.Vector3(distance, distance * 0.65, distance));
+  camera.near = Math.max(distance / 1000, 0.01);
+  camera.far = distance * 100;
+  camera.updateProjectionMatrix();
+  controls.update();
 }
 
-async function openViewer(project) {
-  $('#viewer-title').textContent = project.name;
-  $('#viewer-stage').dataset.projectId = project.id;
+async function openFile(file) {
+  const extension = file.name.split('.').pop().toLowerCase();
+  if (!['glb', 'gltf'].includes(extension)) throw new Error('Selecciona un archivo .GLB o .GLTF.');
+  if (file.size > 250 * 1024 * 1024) throw new Error('El modelo supera el límite local de 250 MB.');
+  initializeViewer();
+  if (model) scene.remove(model);
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(file);
+  $('#viewer-title').textContent = file.name.replace(/\.(glb|gltf)$/i, '');
+  $('#viewer-message').textContent = 'Cargando geometría y materiales…';
   show('viewer');
-  await loadTrimbleViewer(project.id);
-}
-
-async function loadTrimbleViewer(projectId) {
-  const frame = $('#connect-frame');
-  const placeholder = $('#viewer-placeholder');
-  const message = $('#viewer-message');
-  message.textContent = 'Conectando con el visor oficial de Trimble…';
-  placeholder.hidden = false;
-  frame.hidden = true;
-  try {
-    if (!window.TrimbleConnectWorkspace) throw new Error('No se cargó la API de Trimble Connect.');
-    const session = await request('/api/trimble/embed-session');
-    frame.src = window.TrimbleConnectWorkspace.getConnectEmbedUrl('prod');
-    const api = await window.TrimbleConnectWorkspace.connect(frame, (event) => {
-      if (event === 'embed.pageLoaded') { frame.hidden = false; placeholder.hidden = true; }
-      if (event === 'embed.session.invalid') message.textContent = 'La sesión de Trimble expiró. Vuelve a conectarla.';
-    }, 30000);
-    await api.embed.setTokens({ accessToken: session.accessToken, expiresIn: session.expiresIn });
-    await api.embed.init3DViewer({ projectId });
-    frame.hidden = false;
-    placeholder.hidden = true;
-  } catch (error) {
-    message.textContent = error.message || 'No se pudo iniciar el visor 3D.';
-  }
-}
-
-async function loadProjects() {
-  $('#projects-message').textContent = 'Cargando proyectos…';
-  try {
-    const session = await request('/api/session');
-    $('#profile-email').textContent = session.email || 'Usuario conectado';
-    const projects = normalizeProjects(await request('/api/projects'));
-    renderProjects(projects);
-    $('#projects-message').textContent = projects.length ? '' : 'No se encontraron proyectos para esta cuenta.';
-    show('projects');
-  } catch (error) { $('#projects-message').textContent = error.message; $('#projects-message').classList.add('error'); }
+  const gltf = await new GLTFLoader().loadAsync(objectUrl);
+  model = gltf.scene;
+  model.traverse(item => {
+    if (item.isMesh) { item.castShadow = true; item.receiveShadow = true; }
+  });
+  scene.add(model);
+  frameModel();
+  $('#viewer-message').textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)} MB`;
 }
 
 $('#license-form').addEventListener('submit', async event => {
   event.preventDefault();
   const message = $('#license-message');
-  message.classList.remove('error'); message.textContent = 'Validando licencia…';
+  message.classList.remove('error');
+  message.textContent = 'Validando licencia…';
   try {
-    const result = await request('/api/license/validate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: $('#email').value.trim(), licenseKey: $('#license-key').value.trim() }) });
-    message.textContent = result.message; show('trimble');
+    const result = await request('/api/license/validate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: $('#email').value.trim(), licenseKey: $('#license-key').value.trim() })
+    });
+    message.textContent = result.message;
+    $('#profile-email').textContent = $('#email').value.trim();
+    show('import');
   } catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 
-$('#back-projects').addEventListener('click', () => { $('#connect-frame').src = 'about:blank'; show('projects'); });
+$('#model-file').addEventListener('change', event => {
+  const file = event.target.files[0];
+  if (file) openFile(file).catch(error => { $('#import-message').textContent = error.message; });
+});
+const dropZone = $('#drop-zone');
+dropZone.addEventListener('dragover', event => { event.preventDefault(); dropZone.classList.add('dragging'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+dropZone.addEventListener('drop', event => {
+  event.preventDefault();
+  dropZone.classList.remove('dragging');
+  const file = event.dataTransfer.files[0];
+  if (file) openFile(file).catch(error => { $('#import-message').textContent = error.message; });
+});
+$('#fit-model').addEventListener('click', frameModel);
+$('#back-import').addEventListener('click', () => show('import'));
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }); show('license'); });
-
-const params = new URLSearchParams(location.search);
-if (params.get('connected') === '1') { history.replaceState({}, '', '/'); loadProjects(); }
-else if (params.has('error')) { $('#license-message').textContent = `No se pudo continuar: ${params.get('error')}`; $('#license-message').classList.add('error'); history.replaceState({}, '', '/'); }
-else request('/api/session').then(session => { if (session.trimbleConnected) loadProjects(); else if (session.licensed) show('trimble'); }).catch(() => {});
+request('/api/session').then(session => {
+  if (session.licensed) {
+    $('#profile-email').textContent = session.email || 'Usuario autorizado';
+    show('import');
+  }
+}).catch(() => {});
