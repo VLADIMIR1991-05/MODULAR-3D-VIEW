@@ -7,7 +7,7 @@ module Modular3D
 
     def self.publish
       model = Sketchup.active_model
-      if model.nil? || model.entities.empty?
+      if model.nil? || model.entities.length.zero?
         UI.messagebox('Abre un modelo SketchUp antes de publicarlo.')
         return
       end
