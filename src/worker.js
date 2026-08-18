@@ -72,6 +72,12 @@ async function validateLicense(body, env) {
   return { valid: demo, message: demo ? 'Licencia demostrativa activa.' : 'Servidor de licencias pendiente de configurar.' };
 }
 
+function safeModelPath(value) {
+  const decoded = decodeURIComponent(value || '').replace(/\\/g, '/');
+  if (!decoded || decoded.includes('..') || decoded.startsWith('/')) return null;
+  return decoded.split('/').filter(Boolean).map(part => part.replace(/[^0-9A-Za-z._ -]/g, '_')).join('/');
+}
+
 async function api(request, env) {
   const url = new URL(request.url);
   if (url.pathname === '/api/health') return json({ ok: true, service: 'MODULAR-3D VIEW' });
@@ -82,6 +88,70 @@ async function api(request, env) {
     if (!result.valid) return json(result, 401);
     const sessionId = id(); await putSession(sessionId, { email: body.email, licensed: true, createdAt: Date.now() }, env);
     return json(result, 200, { 'set-cookie': sessionCookie(sessionId, 3600, useSecureCookies(request)) });
+  }
+  if (url.pathname === '/api/models/init' && request.method === 'POST') {
+    const session = await getSession(request, env);
+    if (!session?.licensed) return json({ error: 'license_required' }, 401);
+    if (!env.MODELS) return json({ error: 'r2_not_configured', message: 'El almacenamiento para celulares todavía no está conectado.' }, 503);
+    const body = await request.json().catch(() => ({}));
+    const modelId = id();
+    const shareToken = id().replace(/-/g, '') + id().replace(/-/g, '');
+    const metadata = {
+      id: modelId,
+      name: String(body.name || 'Proyecto').slice(0, 120),
+      owner: session.email,
+      shareToken,
+      files: [],
+      createdAt: Date.now()
+    };
+    await env.SESSIONS.put(`model:${modelId}`, JSON.stringify(metadata));
+    return json({ id: modelId });
+  }
+  const uploadMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/files\/(.+)$/);
+  if (uploadMatch && request.method === 'PUT') {
+    const session = await getSession(request, env);
+    const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${uploadMatch[1]}`, 'json') : null;
+    if (!session?.licensed || !metadata || metadata.owner !== session.email) return json({ error: 'forbidden' }, 403);
+    if (!env.MODELS) return json({ error: 'r2_not_configured' }, 503);
+    const path = safeModelPath(uploadMatch[2]);
+    if (!path) return json({ error: 'invalid_path' }, 400);
+    await env.MODELS.put(`models/${metadata.id}/${path}`, request.body, {
+      httpMetadata: { contentType: request.headers.get('content-type') || 'application/octet-stream' }
+    });
+    return json({ ok: true, path });
+  }
+  const finalizeMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/finalize$/);
+  if (finalizeMatch && request.method === 'POST') {
+    const session = await getSession(request, env);
+    const key = `model:${finalizeMatch[1]}`;
+    const metadata = env.SESSIONS ? await env.SESSIONS.get(key, 'json') : null;
+    if (!session?.licensed || !metadata || metadata.owner !== session.email) return json({ error: 'forbidden' }, 403);
+    const body = await request.json().catch(() => ({}));
+    metadata.files = Array.isArray(body.files) ? body.files.map(safeModelPath).filter(Boolean).slice(0, 500) : [];
+    metadata.entry = metadata.files.find(file => file.toLowerCase().endsWith('.dae')) || null;
+    if (!metadata.entry) return json({ error: 'dae_required', message: 'No se encontró el archivo DAE del proyecto.' }, 400);
+    await env.SESSIONS.put(key, JSON.stringify(metadata));
+    return json({ url: `${env.APP_BASE_URL || url.origin}/view/${metadata.id}?token=${metadata.shareToken}` });
+  }
+  const manifestMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/manifest$/);
+  if (manifestMatch && request.method === 'GET') {
+    const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${manifestMatch[1]}`, 'json') : null;
+    if (!metadata || !safeEqual(metadata.shareToken, url.searchParams.get('token'))) return json({ error: 'not_found' }, 404);
+    return json({ id: metadata.id, name: metadata.name, files: metadata.files, entry: metadata.entry });
+  }
+  const sharedFileMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/file\/(.+)$/);
+  if (sharedFileMatch && request.method === 'GET') {
+    const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${sharedFileMatch[1]}`, 'json') : null;
+    if (!metadata || !safeEqual(metadata.shareToken, url.searchParams.get('token')) || !env.MODELS) return json({ error: 'not_found' }, 404);
+    const path = safeModelPath(sharedFileMatch[2]);
+    if (!path || !metadata.files.includes(path)) return json({ error: 'not_found' }, 404);
+    const object = await env.MODELS.get(`models/${metadata.id}/${path}`);
+    if (!object) return json({ error: 'not_found' }, 404);
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', object.httpEtag);
+    headers.set('cache-control', 'private, max-age=3600');
+    return new Response(object.body, { headers });
   }
   if (url.pathname === '/api/trimble/login') {
     const session = await getSession(request, env);
