@@ -78,6 +78,69 @@ function safeModelPath(value) {
   return decoded.split('/').filter(Boolean).map(part => part.replace(/[^0-9A-Za-z._ -]/g, '_')).join('/');
 }
 
+const FREE_BYTES = 10 * 1024 ** 3;
+const WARNING_BYTES = 8 * 1024 ** 3;
+const SAFE_LIMIT_BYTES = 9 * 1024 ** 3;
+function ownerModelsKey(email) { return `models:owner:${encodeURIComponent(String(email || '').toLowerCase())}`; }
+async function getOwnerModelIds(email, env) {
+  if (!env.SESSIONS) return [];
+  return (await env.SESSIONS.get(ownerModelsKey(email), 'json')) || [];
+}
+async function putOwnerModelIds(email, ids, env) {
+  return env.SESSIONS.put(ownerModelsKey(email), JSON.stringify([...new Set(ids)].slice(-500)));
+}
+async function listModelObjects(modelId, env) {
+  if (!env.MODELS?.list) return [];
+  const objects = [];
+  let cursor;
+  do {
+    const page = await env.MODELS.list({ prefix: `models/${modelId}/`, ...(cursor ? { cursor } : {}), limit: 1000 });
+    objects.push(...page.objects);
+    cursor = page.truncated ? page.cursor : null;
+  } while (cursor);
+  return objects;
+}
+async function getOwnedModels(email, env) {
+  let ids = await getOwnerModelIds(email, env);
+  if (!ids.length && env.SESSIONS?.list) {
+    const listed = await env.SESSIONS.list({ prefix: 'model:', limit: 1000 });
+    const legacyModels = (await Promise.all(listed.keys.map(item => env.SESSIONS.get(item.name, 'json')))).filter(model => String(model?.owner).toLowerCase() === String(email).toLowerCase());
+    ids = legacyModels.map(model => model.id);
+    if (ids.length) await putOwnerModelIds(email, ids, env);
+  }
+  const models = (await Promise.all(ids.map(modelId => env.SESSIONS.get(`model:${modelId}`, 'json')))).filter(model => String(model?.owner).toLowerCase() === String(email).toLowerCase());
+  await Promise.all(models.map(async model => {
+    if (model.sizeBytes || !env.MODELS) return;
+    model.sizeBytes = (await listModelObjects(model.id, env)).reduce((total, object) => total + Number(object.size || 0), 0);
+    await env.SESSIONS.put(`model:${model.id}`, JSON.stringify(model));
+  }));
+  return models.sort((a, b) => b.createdAt - a.createdAt);
+}
+async function bucketUsedBytes(env) {
+  if (!env.MODELS?.list) return 0;
+  let total = 0;
+  let cursor;
+  do {
+    const page = await env.MODELS.list({ prefix: 'models/', ...(cursor ? { cursor } : {}), limit: 1000 });
+    total += page.objects.reduce((sum, object) => sum + Number(object.size || 0), 0);
+    cursor = page.truncated ? page.cursor : null;
+  } while (cursor);
+  return total;
+}
+function storageSummary(models, actualUsedBytes = null) {
+  const usedBytes = actualUsedBytes ?? models.reduce((total, model) => total + Number(model.sizeBytes || 0), 0);
+  return { usedBytes, freeBytes: FREE_BYTES, warningBytes: WARNING_BYTES, safeLimitBytes: SAFE_LIMIT_BYTES, percent: Math.min(100, usedBytes / FREE_BYTES * 100), warning: usedBytes >= WARNING_BYTES };
+}
+async function sha256Hex(value) {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value || '')));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+async function sharedAccessAllowed(metadata, url) {
+  if (!metadata || metadata.active === false || (metadata.expiresAt && metadata.expiresAt < Date.now()) || !safeEqual(metadata.shareToken, url.searchParams.get('token'))) return false;
+  if (!metadata.passwordHash) return true;
+  return safeEqual(metadata.passwordHash, await sha256Hex(url.searchParams.get('password')));
+}
+
 async function api(request, env) {
   const url = new URL(request.url);
   if (url.pathname === '/api/health') return json({ ok: true, service: 'MODULAR-3D VIEW' });
@@ -89,11 +152,26 @@ async function api(request, env) {
     const sessionId = id(); await putSession(sessionId, { email: body.email, licensed: true, createdAt: Date.now() }, env);
     return json(result, 200, { 'set-cookie': sessionCookie(sessionId, 3600, useSecureCookies(request)) });
   }
+  if (url.pathname === '/api/models' && request.method === 'GET') {
+    const session = await getSession(request, env);
+    if (!session?.licensed) return json({ error: 'license_required' }, 401);
+    const models = await getOwnedModels(session.email, env);
+    const actualUsedBytes = await bucketUsedBytes(env);
+    return json({
+      models: models.map(model => ({ id: model.id, name: model.name, sizeBytes: model.sizeBytes || 0, createdAt: model.createdAt, expiresAt: model.expiresAt || null, active: model.active !== false && (!model.expiresAt || model.expiresAt > Date.now()), url: `${env.APP_BASE_URL || url.origin}/view/${model.id}?token=${model.shareToken}` })),
+      storage: storageSummary(models, actualUsedBytes)
+    }, 200, { 'cache-control': 'no-store' });
+  }
   if (url.pathname === '/api/models/init' && request.method === 'POST') {
     const session = await getSession(request, env);
     if (!session?.licensed) return json({ error: 'license_required' }, 401);
     if (!env.MODELS) return json({ error: 'r2_not_configured', message: 'El almacenamiento para celulares todavía no está conectado.' }, 503);
     const body = await request.json().catch(() => ({}));
+    const requestedBytes = Math.max(0, Number(body.totalSize || 0));
+    const ownedModels = await getOwnedModels(session.email, env);
+    const storage = storageSummary(ownedModels, await bucketUsedBytes(env));
+    if (requestedBytes > 1024 ** 3) return json({ error: 'model_too_large', message: 'El proyecto supera el límite de seguridad de 1 GB.' }, 413);
+    if (storage.usedBytes + requestedBytes > SAFE_LIMIT_BYTES) return json({ error: 'storage_limit', message: 'La publicación superaría el límite preventivo de 9 GB. Elimina proyectos antiguos antes de continuar.' }, 413);
     const modelId = id();
     const shareToken = id().replace(/-/g, '') + id().replace(/-/g, '');
     const metadata = {
@@ -102,10 +180,15 @@ async function api(request, env) {
       owner: session.email,
       shareToken,
       files: [],
+      sizeBytes: requestedBytes,
+      active: true,
+      passwordHash: body.password ? await sha256Hex(String(body.password).slice(0, 64)) : null,
+      expiresAt: Date.now() + Math.min(Math.max(Number(body.expiresDays || 30), 1), 365) * 86400000,
       createdAt: Date.now()
     };
     await env.SESSIONS.put(`model:${modelId}`, JSON.stringify(metadata));
-    return json({ id: modelId });
+    await putOwnerModelIds(session.email, [...await getOwnerModelIds(session.email, env), modelId], env);
+    return json({ id: modelId, storage: { ...storage, projectedBytes: storage.usedBytes + requestedBytes } });
   }
   const uploadMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/files\/(.+)$/);
   if (uploadMatch && request.method === 'PUT') {
@@ -127,22 +210,52 @@ async function api(request, env) {
     const metadata = env.SESSIONS ? await env.SESSIONS.get(key, 'json') : null;
     if (!session?.licensed || !metadata || metadata.owner !== session.email) return json({ error: 'forbidden' }, 403);
     const body = await request.json().catch(() => ({}));
-    metadata.files = Array.isArray(body.files) ? body.files.map(safeModelPath).filter(Boolean).slice(0, 500) : [];
+    metadata.files = Array.isArray(body.files) ? body.files.map(file => safeModelPath(typeof file === 'string' ? file : file.path)).filter(Boolean).slice(0, 500) : [];
+    if (Array.isArray(body.files)) metadata.sizeBytes = body.files.reduce((total, file) => total + Math.max(0, Number(typeof file === 'object' ? file.size : 0)), 0) || metadata.sizeBytes;
     metadata.entry = metadata.files.find(file => file.toLowerCase().endsWith('.dae')) || null;
     if (!metadata.entry) return json({ error: 'dae_required', message: 'No se encontró el archivo DAE del proyecto.' }, 400);
     await env.SESSIONS.put(key, JSON.stringify(metadata));
     return json({ url: `${env.APP_BASE_URL || url.origin}/view/${metadata.id}?token=${metadata.shareToken}` });
   }
+  const manageMatch = url.pathname.match(/^\/api\/models\/([^/]+)$/);
+  if (manageMatch && ['PATCH', 'DELETE'].includes(request.method)) {
+    const session = await getSession(request, env);
+    const key = `model:${manageMatch[1]}`;
+    const metadata = env.SESSIONS ? await env.SESSIONS.get(key, 'json') : null;
+    if (!session?.licensed || !metadata || metadata.owner !== session.email) return json({ error: 'forbidden' }, 403);
+    if (request.method === 'DELETE') {
+      if (env.MODELS) {
+        const objects = await listModelObjects(metadata.id, env);
+        if (objects.length) await env.MODELS.delete(objects.map(object => object.key));
+      }
+      await env.SESSIONS.delete(key);
+      await putOwnerModelIds(session.email, (await getOwnerModelIds(session.email, env)).filter(modelId => modelId !== metadata.id), env);
+      return json({ ok: true });
+    }
+    const body = await request.json().catch(() => ({}));
+    if (body.name) metadata.name = String(body.name).slice(0, 120);
+    if (typeof body.active === 'boolean') metadata.active = body.active;
+    if (body.regenerateToken) {
+      metadata.shareToken = id().replace(/-/g, '') + id().replace(/-/g, '');
+      metadata.expiresAt = Date.now() + 30 * 86400000;
+    }
+    if (body.expiresDays) metadata.expiresAt = Date.now() + Math.min(Math.max(Number(body.expiresDays), 1), 365) * 86400000;
+    await env.SESSIONS.put(key, JSON.stringify(metadata));
+    return json({ ok: true, url: `${env.APP_BASE_URL || url.origin}/view/${metadata.id}?token=${metadata.shareToken}` });
+  }
   const manifestMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/manifest$/);
   if (manifestMatch && request.method === 'GET') {
     const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${manifestMatch[1]}`, 'json') : null;
-    if (!metadata || !safeEqual(metadata.shareToken, url.searchParams.get('token'))) return json({ error: 'not_found' }, 404);
+    if (!await sharedAccessAllowed(metadata, url)) {
+      if (metadata?.passwordHash && safeEqual(metadata.shareToken, url.searchParams.get('token'))) return json({ error: 'password_required', message: 'Este proyecto requiere contraseña.' }, 401);
+      return json({ error: 'not_found', message: 'El enlace no existe, fue desactivado o venció.' }, 404);
+    }
     return json({ id: metadata.id, name: metadata.name, files: metadata.files, entry: metadata.entry });
   }
   const sharedFileMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/file\/(.+)$/);
   if (sharedFileMatch && request.method === 'GET') {
     const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${sharedFileMatch[1]}`, 'json') : null;
-    if (!metadata || !safeEqual(metadata.shareToken, url.searchParams.get('token')) || !env.MODELS) return json({ error: 'not_found' }, 404);
+    if (!await sharedAccessAllowed(metadata, url) || !env.MODELS) return json({ error: 'not_found' }, 404);
     const path = safeModelPath(sharedFileMatch[2]);
     if (!path || !metadata.files.includes(path)) return json({ error: 'not_found' }, 404);
     const object = await env.MODELS.get(`models/${metadata.id}/${path}`);
