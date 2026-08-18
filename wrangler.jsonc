@@ -20,5 +20,11 @@
       "id": "231fadaabbfe4ac9aea8c5b6c342273a"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "MODELS",
+      "bucket_name": "modular-3d-models"
+    }
+  ],
   "observability": { "enabled": true }
 }
