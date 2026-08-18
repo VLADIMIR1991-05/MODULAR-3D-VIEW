@@ -7,6 +7,7 @@ const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
 let objectUrl, renderer, scene, camera, controls, model;
 let currentFiles = [];
+let navigatorDragging = false;
 
 function show(name) {
   screens.forEach(item => {
@@ -37,6 +38,7 @@ function initializeViewer() {
   stage.prepend(renderer.domElement);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
+  controls.addEventListener('change', updateNavigator);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 2.5));
   const sun = new THREE.DirectionalLight(0xffffff, 3);
   sun.position.set(8, 12, 6);
@@ -65,6 +67,106 @@ function frameModel() {
   camera.far = distance * 100;
   camera.updateProjectionMatrix();
   controls.update();
+}
+
+function modelCenter() {
+  return model ? new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3()) : controls.target.clone();
+}
+
+function moveCameraTo(direction, duration = 360) {
+  if (!camera || !controls) return;
+  const target = modelCenter();
+  const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+  const end = target.clone().add(direction.clone().normalize().multiplyScalar(distance));
+  if (duration <= 0) {
+    camera.position.copy(end);
+    controls.target.copy(target);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(target);
+    controls.update();
+    return;
+  }
+  const start = camera.position.clone();
+  const startTarget = controls.target.clone();
+  const began = performance.now();
+  const animateMove = now => {
+    const progress = Math.min((now - began) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    camera.position.lerpVectors(start, end, eased);
+    controls.target.lerpVectors(startTarget, target, eased);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(controls.target);
+    controls.update();
+    if (progress < 1) requestAnimationFrame(animateMove);
+  };
+  requestAnimationFrame(animateMove);
+}
+
+function currentViewDirection() {
+  return camera.position.clone().sub(controls.target).normalize();
+}
+
+function orbitStep(action, angle = Math.PI / 4, duration = 360) {
+  const direction = currentViewDirection();
+  if (action === 'left' || action === 'right') {
+    direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), action === 'left' ? -angle : angle);
+  } else {
+    const spherical = new THREE.Spherical().setFromVector3(direction);
+    spherical.phi = THREE.MathUtils.clamp(spherical.phi + (action === 'up' ? -angle : angle), .08, Math.PI - .08);
+    direction.setFromSpherical(spherical);
+  }
+  moveCameraTo(direction, duration);
+}
+
+function updateNavigator() {
+  if (!camera || !controls) return;
+  const direction = currentViewDirection();
+  const horizontal = Math.atan2(direction.x, direction.z);
+  const names = ['FRENTE', 'DERECHA', 'ATRÁS', 'IZQUIERDA'];
+  let index = Math.round(horizontal / (Math.PI / 2));
+  index = ((index % 4) + 4) % 4;
+  let label = names[index];
+  if (direction.y > .82) label = 'ARRIBA';
+  if (direction.y < -.82) label = 'ABAJO';
+  $('#nav-label').textContent = label;
+}
+
+function initializeNavigator() {
+  const navigator = $('#view-navigator');
+  navigator.querySelectorAll('[data-view]').forEach(button => {
+    button.addEventListener('click', event => {
+      if (navigatorDragging) return;
+      const [x, y, z] = event.currentTarget.dataset.view.split(',').map(Number);
+      const current = currentViewDirection();
+      const quarter = Math.round(Math.atan2(current.x, current.z) / (Math.PI / 2)) * (Math.PI / 2);
+      const direction = new THREE.Vector3(x, y, z).applyAxisAngle(new THREE.Vector3(0, 1, 0), quarter);
+      moveCameraTo(direction);
+      navigator.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === event.currentTarget));
+    });
+  });
+  navigator.querySelectorAll('[data-orbit]').forEach(button => button.addEventListener('click', () => orbitStep(button.dataset.orbit)));
+  $('#nav-home').addEventListener('click', () => moveCameraTo(new THREE.Vector3(1, .65, 1)));
+  const face = $('#nav-face');
+  let previous = null;
+  face.addEventListener('pointerdown', event => {
+    navigatorDragging = false;
+    previous = { x: event.clientX, y: event.clientY };
+    face.setPointerCapture(event.pointerId);
+  });
+  face.addEventListener('pointermove', event => {
+    if (!previous) return;
+    const dx = event.clientX - previous.x;
+    const dy = event.clientY - previous.y;
+    if (Math.abs(dx) + Math.abs(dy) > 2) navigatorDragging = true;
+    if (navigatorDragging) {
+      if (Math.abs(dx) >= 1) orbitStep(dx > 0 ? 'right' : 'left', Math.abs(dx) * .008, 0);
+      if (Math.abs(dy) >= 1) orbitStep(dy > 0 ? 'down' : 'up', Math.abs(dy) * .008, 0);
+      previous = { x: event.clientX, y: event.clientY };
+    }
+  });
+  const endDrag = () => { previous = null; setTimeout(() => { navigatorDragging = false; }, 0); };
+  face.addEventListener('pointerup', endDrag);
+  face.addEventListener('pointercancel', endDrag);
 }
 
 async function openFile(file) {
@@ -235,6 +337,7 @@ $('#copy-link').addEventListener('click', async () => {
 });
 $('#back-import').addEventListener('click', () => show('import'));
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }); show('license'); });
+initializeNavigator();
 loadSharedModel().catch(error => {
   show('viewer');
   $('#viewer-message').textContent = error.message;
