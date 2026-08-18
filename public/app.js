@@ -121,27 +121,51 @@ function orbitStep(action, angle = Math.PI / 4, duration = 360) {
 function updateNavigator() {
   if (!camera || !controls) return;
   const direction = currentViewDirection();
-  const horizontal = Math.atan2(direction.x, direction.z);
-  const names = ['FRENTE', 'DERECHA', 'ATRÁS', 'IZQUIERDA'];
-  let index = Math.round(horizontal / (Math.PI / 2));
-  index = ((index % 4) + 4) % 4;
-  let label = names[index];
-  if (direction.y > .82) label = 'ARRIBA';
-  if (direction.y < -.82) label = 'ABAJO';
-  $('#nav-label').textContent = label;
+  const yaw = THREE.MathUtils.radToDeg(Math.atan2(direction.x, direction.z));
+  const pitch = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1)));
+  $('#nav-cube').style.transform = `rotateX(${pitch}deg) rotateY(${-yaw}deg)`;
+  document.querySelectorAll('.nav-cube-face [data-view]').forEach(button => {
+    const candidate = new THREE.Vector3(...button.dataset.view.split(',').map(Number)).normalize();
+    button.classList.toggle('active', candidate.dot(direction) > .995);
+  });
 }
 
 function initializeNavigator() {
   const navigator = $('#view-navigator');
+  const cube = $('#nav-cube');
+  const faces = [
+    { name: 'front', label: 'FRENTE', normal: [0, 0, 1], horizontal: [1, 0, 0], vertical: [0, 1, 0] },
+    { name: 'back', label: 'ATRÁS', normal: [0, 0, -1], horizontal: [-1, 0, 0], vertical: [0, 1, 0] },
+    { name: 'right', label: 'DERECHA', normal: [1, 0, 0], horizontal: [0, 0, -1], vertical: [0, 1, 0] },
+    { name: 'left', label: 'IZQUIERDA', normal: [-1, 0, 0], horizontal: [0, 0, 1], vertical: [0, 1, 0] },
+    { name: 'top', label: 'ARRIBA', normal: [0, 1, 0], horizontal: [1, 0, 0], vertical: [0, 0, -1] },
+    { name: 'bottom', label: 'ABAJO', normal: [0, -1, 0], horizontal: [1, 0, 0], vertical: [0, 0, 1] }
+  ];
+  const rows = [1, 0, -1];
+  const columns = [-1, 0, 1];
+  faces.forEach(face => {
+    const element = document.createElement('div');
+    element.className = `nav-cube-face cube-${face.name}`;
+    rows.forEach((row, rowIndex) => columns.forEach((column, columnIndex) => {
+      const direction = new THREE.Vector3(...face.normal)
+        .addScaledVector(new THREE.Vector3(...face.horizontal), column)
+        .addScaledVector(new THREE.Vector3(...face.vertical), row);
+      const button = document.createElement('button');
+      button.dataset.view = direction.toArray().join(',');
+      button.title = row === 0 && column === 0 ? `Vista ${face.label.toLowerCase()}` : `Vista diagonal desde ${face.label.toLowerCase()}`;
+      if (rowIndex === 1 && columnIndex === 1) {
+        button.className = 'nav-center';
+        button.textContent = face.label;
+      }
+      element.appendChild(button);
+    }));
+    cube.appendChild(element);
+  });
   navigator.querySelectorAll('[data-view]').forEach(button => {
     button.addEventListener('click', event => {
       if (navigatorDragging) return;
       const [x, y, z] = event.currentTarget.dataset.view.split(',').map(Number);
-      const current = currentViewDirection();
-      const quarter = Math.round(Math.atan2(current.x, current.z) / (Math.PI / 2)) * (Math.PI / 2);
-      const direction = new THREE.Vector3(x, y, z).applyAxisAngle(new THREE.Vector3(0, 1, 0), quarter);
-      moveCameraTo(direction);
-      navigator.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === event.currentTarget));
+      moveCameraTo(new THREE.Vector3(x, y, z));
     });
   });
   navigator.querySelectorAll('[data-orbit]').forEach(button => button.addEventListener('click', () => orbitStep(button.dataset.orbit)));
