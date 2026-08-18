@@ -3,6 +3,7 @@
   "name": "modular-3d-view",
   "main": "src/worker.js",
   "compatibility_date": "2026-08-01",
+  "keep_vars": true,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -11,7 +12,6 @@
   },
   "vars": {
     "APP_BASE_URL": "https://modular-3d-view.lenin19910527.workers.dev",
-    "ALLOW_DEMO_LICENSE": "false",
     "TRIMBLE_REGION": "us"
   },
   "kv_namespaces": [
