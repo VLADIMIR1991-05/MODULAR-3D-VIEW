@@ -2,14 +2,14 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/VLADIMIR1991-05/MODULAR-3D-VIEW)
 
-Aplicación web para validar licencias de MODULAR-3D VIEW y conectar cada usuario con sus proyectos de SketchUp almacenados en Trimble Connect.
+Aplicación web independiente para validar licencias de MODULAR-3D VIEW y visualizar modelos 3D optimizados sin depender de una API pagada de Trimble Connect.
 
 ## Flujo
 
 1. Validación de correo y licencia.
-2. Inicio de sesión seguro mediante Trimble ID.
-3. Consulta de proyectos permitidos en Trimble Connect.
-4. Apertura del proyecto en el visor 3D oficial mediante Workspace API.
+2. Selección local de un modelo GLB/GLTF.
+3. Visualización con materiales, órbita, zoom y encuadre automático.
+4. Próxima integración: publicación desde SketchUp y almacenamiento R2 por licencia.
 
 ## Desarrollo local
 
@@ -56,6 +56,4 @@ El archivo `render.yaml` permite crear el servicio desde un Blueprint. Configura
 
 ## Estado del visor
 
-El visor oficial está integrado mediante Workspace API (`embed.setTokens` y `embed.init3DViewer`). Trimble debe tener registrado y habilitado el dominio final y la URL de retorno para que el componente pueda cargar proyectos reales.
-
-Los tokens de actualización permanecen en el servidor. El navegador recibe solamente el token de acceso temporal requerido por el componente oficial.
+El visor propio usa Three.js y carga GLB/GLTF directamente en el navegador. Los modelos locales no se suben al servidor en esta primera fase. La publicación mediante enlaces y QR utilizará un bucket R2 con acceso controlado por la sesión de licencia.
