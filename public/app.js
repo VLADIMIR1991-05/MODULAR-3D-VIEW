@@ -6,6 +6,7 @@ import { ColladaLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders
 const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
 let objectUrl, renderer, scene, camera, controls, model;
+let currentFiles = [];
 
 function show(name) {
   screens.forEach(item => {
@@ -89,6 +90,7 @@ async function openFile(file) {
 
 async function openSketchUpExport(fileList) {
   const files = Array.from(fileList);
+  currentFiles = files;
   const dae = files.find(file => file.name.toLowerCase().endsWith('.dae'));
   if (!dae) throw new Error('La carpeta no contiene el archivo .DAE exportado por SketchUp.');
   show('viewer');
@@ -117,6 +119,73 @@ async function openSketchUpExport(fileList) {
   scene.add(model);
   frameModel();
   $('#viewer-message').textContent = `${dae.name} · exportado desde SketchUp`;
+}
+
+async function loadSharedModel() {
+  const match = location.pathname.match(/^\/view\/([^/]+)$/);
+  if (!match) return false;
+  const token = new URLSearchParams(location.search).get('token');
+  if (!token) throw new Error('El enlace del proyecto está incompleto.');
+  show('viewer');
+  initializeViewer();
+  $('#publish-mobile').hidden = true;
+  $('#back-import').hidden = true;
+  $('#viewer-message').textContent = 'Descargando proyecto compartido…';
+  const manifest = await request(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}`);
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(url => {
+    const clean = decodeURIComponent(url).replace(/^\.\//, '');
+    const path = manifest.files.find(file => file === clean || file.split('/').pop() === clean.split('/').pop());
+    return path ? `/api/shared/${manifest.id}/file/${path.split('/').map(encodeURIComponent).join('/')}?token=${encodeURIComponent(token)}` : url;
+  });
+  const entryUrl = `/api/shared/${manifest.id}/file/${manifest.entry.split('/').map(encodeURIComponent).join('/')}?token=${encodeURIComponent(token)}`;
+  const response = await fetch(entryUrl);
+  if (!response.ok) throw new Error('No se pudo descargar el modelo compartido.');
+  const collada = new ColladaLoader(manager).parse(await response.text(), '');
+  model = collada.scene;
+  scene.add(model);
+  $('#viewer-title').textContent = manifest.name;
+  frameModel();
+  $('#viewer-message').textContent = 'Proyecto compartido · MODULAR-3D VIEW';
+  return true;
+}
+
+async function publishForMobile() {
+  if (!currentFiles.length) throw new Error('Abre primero una exportación de SketchUp.');
+  const button = $('#publish-mobile');
+  button.disabled = true;
+  const original = button.textContent;
+  try {
+    const dae = currentFiles.find(file => file.name.toLowerCase().endsWith('.dae'));
+    const created = await request('/api/models/init', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: dae ? dae.name.replace(/\.dae$/i, '') : 'Proyecto' })
+    });
+    const paths = [];
+    for (let index = 0; index < currentFiles.length; index += 1) {
+      const file = currentFiles[index];
+      const path = (file.webkitRelativePath || file.name).split('/').slice(1).join('/') || file.name;
+      paths.push(path);
+      button.textContent = `Subiendo ${index + 1} de ${currentFiles.length}…`;
+      const response = await fetch(`/api/models/${created.id}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
+        method: 'PUT',
+        headers: { 'content-type': file.type || 'application/octet-stream' },
+        body: file
+      });
+      if (!response.ok) throw new Error('No se pudo subir uno de los archivos del modelo.');
+    }
+    const result = await request(`/api/models/${created.id}/finalize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ files: paths })
+    });
+    $('#share-url').value = result.url;
+    $('#share-panel').hidden = false;
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 $('#license-form').addEventListener('submit', async event => {
@@ -156,11 +225,25 @@ dropZone.addEventListener('drop', event => {
   if (file) openFile(file).catch(error => { $('#import-message').textContent = error.message; });
 });
 $('#fit-model').addEventListener('click', frameModel);
+$('#publish-mobile').addEventListener('click', () => publishForMobile().catch(error => {
+  $('#viewer-message').textContent = error.message;
+}));
+$('#copy-link').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('#share-url').value);
+  $('#copy-link').textContent = 'Copiado';
+  setTimeout(() => { $('#copy-link').textContent = 'Copiar enlace'; }, 1600);
+});
 $('#back-import').addEventListener('click', () => show('import'));
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }); show('license'); });
-request('/api/session').then(session => {
-  if (session.licensed) {
-    $('#profile-email').textContent = session.email || 'Usuario autorizado';
-    show('import');
-  }
+loadSharedModel().catch(error => {
+  show('viewer');
+  $('#viewer-message').textContent = error.message;
+}).then(shared => {
+  if (shared) return;
+  return request('/api/session').then(session => {
+    if (session.licensed) {
+      $('#profile-email').textContent = session.email || 'Usuario autorizado';
+      show('import');
+    }
+  });
 }).catch(() => {});
