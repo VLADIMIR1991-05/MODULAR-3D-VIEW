@@ -39,3 +39,38 @@ test('protects Trimble projects without a session', async () => {
   const response = await worker.fetch(new Request('https://example.com/api/projects'), env);
   assert.equal(response.status, 401);
 });
+
+test('publishes, accounts for, and deletes an R2 model', async () => {
+  const values = new Map();
+  const objects = new Map();
+  const testEnv = {
+    ...env,
+    APP_BASE_URL: 'https://example.com',
+    SESSIONS: {
+      async get(key, type) { const value = values.get(key); return type === 'json' && value ? JSON.parse(value) : value || null; },
+      async put(key, value) { values.set(key, value); },
+      async delete(key) { values.delete(key); },
+      async list({ prefix }) { return { keys: [...values.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), truncated: false }; }
+    },
+    MODELS: {
+      async put(key, body) { const buffer = await new Response(body).arrayBuffer(); objects.set(key, { key, size: buffer.byteLength }); },
+      async list({ prefix }) { return { objects: [...objects.values()].filter(object => object.key.startsWith(prefix)), truncated: false }; },
+      async delete(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) objects.delete(key); }
+    }
+  };
+  const login = await worker.fetch(new Request('https://example.com/api/license/validate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'owner@example.com', licenseKey: 'M3D-VIEW-2026-DEMO' }) }), testEnv);
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const init = await worker.fetch(new Request('https://example.com/api/models/init', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Prueba', totalSize: 4, expiresDays: 30 }) }), testEnv);
+  assert.equal(init.status, 200);
+  const { id } = await init.json();
+  const upload = await worker.fetch(new Request(`https://example.com/api/models/${id}/files/model.dae`, { method: 'PUT', headers: { cookie, 'content-type': 'text/plain' }, body: 'test' }), testEnv);
+  assert.equal(upload.status, 200);
+  const finalize = await worker.fetch(new Request(`https://example.com/api/models/${id}/finalize`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ files: [{ path: 'model.dae', size: 4 }] }) }), testEnv);
+  assert.equal(finalize.status, 200);
+  const listing = await worker.fetch(new Request('https://example.com/api/models', { headers: { cookie } }), testEnv);
+  const listed = await listing.json();
+  assert.equal(listed.models[0].sizeBytes, 4);
+  const removed = await worker.fetch(new Request(`https://example.com/api/models/${id}`, { method: 'DELETE', headers: { cookie } }), testEnv);
+  assert.equal(removed.status, 200);
+  assert.equal(objects.size, 0);
+});
