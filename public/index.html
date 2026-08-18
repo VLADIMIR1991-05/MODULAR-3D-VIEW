@@ -37,7 +37,9 @@
           <p>Arrastra un archivo aquí o selecciónalo desde tu equipo.</p>
           <label class="primary button" for="model-file">Seleccionar modelo</label>
           <input id="model-file" type="file" accept=".glb,.gltf" hidden>
-          <small>Formatos actuales: GLB y GLTF · Máximo local: 250 MB</small>
+          <label class="secondary button folder-button" for="sketchup-folder">Abrir exportación de SketchUp</label>
+          <input id="sketchup-folder" type="file" webkitdirectory multiple hidden>
+          <small>GLB/GLTF o carpeta DAE generada por la extensión · Máximo local: 250 MB</small>
         </div>
         <div class="notice-card"><strong>Automatización de SketchUp</strong><p>La extensión MODULAR-3D preparará la versión web sin modificar el .SKP original.</p></div>
         <p class="message" id="import-message" role="status"></p>
