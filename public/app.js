@@ -70,13 +70,13 @@ async function openFile(file) {
   const extension = file.name.split('.').pop().toLowerCase();
   if (!['glb', 'gltf'].includes(extension)) throw new Error('Selecciona un archivo .GLB o .GLTF.');
   if (file.size > 250 * 1024 * 1024) throw new Error('El modelo supera el límite local de 250 MB.');
+  show('viewer');
   initializeViewer();
   if (model) scene.remove(model);
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
   $('#viewer-title').textContent = file.name.replace(/\.(glb|gltf)$/i, '');
   $('#viewer-message').textContent = 'Cargando geometría y materiales…';
-  show('viewer');
   const gltf = await new GLTFLoader().loadAsync(objectUrl);
   model = gltf.scene;
   model.traverse(item => {
@@ -91,6 +91,7 @@ async function openSketchUpExport(fileList) {
   const files = Array.from(fileList);
   const dae = files.find(file => file.name.toLowerCase().endsWith('.dae'));
   if (!dae) throw new Error('La carpeta no contiene el archivo .DAE exportado por SketchUp.');
+  show('viewer');
   initializeViewer();
   if (model) scene.remove(model);
   const urls = new Map();
@@ -107,7 +108,6 @@ async function openSketchUpExport(fileList) {
   });
   $('#viewer-title').textContent = dae.name.replace(/\.dae$/i, '');
   $('#viewer-message').textContent = 'Cargando exportación de SketchUp…';
-  show('viewer');
   const text = await dae.text();
   const collada = new ColladaLoader(manager).parse(text, '');
   model = collada.scene;
