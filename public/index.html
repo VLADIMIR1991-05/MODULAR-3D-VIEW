@@ -32,6 +32,11 @@
       <section class="screen" id="import-screen">
         <header class="content-header"><div><p class="eyebrow">LICENCIA ACTIVA</p><h1>Mis proyectos</h1></div><button class="ghost" id="logout">Cerrar sesión</button></header>
         <div class="profile"><span class="avatar">M3</span><div><strong id="profile-email">Usuario autorizado</strong><p class="muted">Visor local seguro</p></div></div>
+        <section class="storage-card" id="storage-card">
+          <div class="storage-heading"><div><strong>Almacenamiento de modelos</strong><p id="storage-text">Calculando espacio utilizado…</p></div><strong id="storage-percent">0%</strong></div>
+          <div class="storage-track"><span id="storage-bar"></span></div>
+          <p class="storage-alert" id="storage-alert" hidden></p>
+        </section>
         <div class="upload-zone" id="drop-zone">
           <span class="upload-icon">◇</span><h2>Abre tu modelo 3D</h2>
           <p>Arrastra un archivo aquí o selecciónalo desde tu equipo.</p>
@@ -42,10 +47,11 @@
           <small>GLB/GLTF o carpeta DAE generada por la extensión · Máximo local: 250 MB</small>
         </div>
         <div class="notice-card"><strong>Automatización de SketchUp</strong><p>La extensión MODULAR-3D preparará la versión web sin modificar el .SKP original.</p></div>
+        <section class="published-projects"><div class="section-heading"><div><p class="eyebrow">PUBLICADOS</p><h2>Enlaces para celular</h2></div><button class="ghost" id="refresh-projects">Actualizar</button></div><div class="published-list" id="published-list"><p class="muted">Todavía no hay proyectos publicados.</p></div></section>
         <p class="message" id="import-message" role="status"></p>
       </section>
       <section class="screen viewer-screen" id="viewer-screen">
-        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><div class="viewer-actions"><button class="primary" id="publish-mobile">Publicar para celular</button><button class="ghost" id="fit-model">Encuadrar</button><button class="secondary" id="back-import">Proyectos</button></div></header>
+        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><div class="viewer-actions"><input id="share-password" type="password" maxlength="64" placeholder="Contraseña opcional" title="Contraseña opcional del enlace"><select id="share-expiry" title="Duración del enlace"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option><option value="365">1 año</option></select><button class="primary" id="publish-mobile">Publicar para celular</button><button class="ghost" id="fit-model">Encuadrar</button><button class="secondary" id="back-import">Proyectos</button></div></header>
         <div class="viewer-stage own-viewer" id="viewer-stage" aria-label="Visor 3D interactivo">
           <div class="view-navigator" id="view-navigator" aria-label="Navegador de orientación 3D">
             <button class="nav-arrow nav-up" data-orbit="up" title="Girar hacia arriba">▲</button>
@@ -54,6 +60,16 @@
             <button class="nav-arrow nav-right" data-orbit="right" title="Girar hacia la derecha">▶</button>
             <button class="nav-arrow nav-down" data-orbit="down" title="Girar hacia abajo">▼</button>
             <button class="nav-home" id="nav-home" title="Vista isométrica inicial">⌂</button>
+          </div>
+          <div class="viewer-toolbar" aria-label="Herramientas del visor">
+            <button id="projection-toggle" title="Alternar perspectiva y ortogonal">Perspectiva</button>
+            <button id="grid-toggle" class="active" title="Mostrar u ocultar cuadrícula">Cuadrícula</button>
+            <button id="shadow-toggle" class="active" title="Activar o desactivar sombras">Sombras</button>
+            <button id="background-toggle" title="Cambiar fondo">Fondo</button>
+            <button id="fullscreen-toggle" title="Pantalla completa">Pantalla completa</button>
+            <button id="capture-view" title="Guardar imagen de la vista">Captura</button>
+            <button id="measure-toggle" title="Medir entre dos puntos">Medir</button>
+            <button id="set-front" title="Definir la orientación actual como frente">Definir frente</button>
           </div>
         </div>
         <div class="viewer-footer"><span><i></i> MODULAR-3D VIEW</span><span id="viewer-message">Arrastra para orbitar · rueda para zoom</span></div>
