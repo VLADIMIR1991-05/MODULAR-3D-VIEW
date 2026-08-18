@@ -1,6 +1,7 @@
 import * as THREE from 'https://esm.sh/three@0.180.0';
 import { OrbitControls } from 'https://esm.sh/three@0.180.0/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js';
+import { ColladaLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders/ColladaLoader.js';
 
 const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
@@ -86,6 +87,38 @@ async function openFile(file) {
   $('#viewer-message').textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)} MB`;
 }
 
+async function openSketchUpExport(fileList) {
+  const files = Array.from(fileList);
+  const dae = files.find(file => file.name.toLowerCase().endsWith('.dae'));
+  if (!dae) throw new Error('La carpeta no contiene el archivo .DAE exportado por SketchUp.');
+  initializeViewer();
+  if (model) scene.remove(model);
+  const urls = new Map();
+  files.forEach(file => {
+    const url = URL.createObjectURL(file);
+    urls.set(file.name.toLowerCase(), url);
+    urls.set((file.webkitRelativePath || file.name).toLowerCase(), url);
+  });
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(url => {
+    const clean = decodeURIComponent(url).replace(/^\.\//, '').toLowerCase();
+    const name = clean.split('/').pop();
+    return urls.get(clean) || urls.get(name) || url;
+  });
+  $('#viewer-title').textContent = dae.name.replace(/\.dae$/i, '');
+  $('#viewer-message').textContent = 'Cargando exportación de SketchUp…';
+  show('viewer');
+  const text = await dae.text();
+  const collada = new ColladaLoader(manager).parse(text, '');
+  model = collada.scene;
+  model.traverse(item => {
+    if (item.isMesh) { item.castShadow = true; item.receiveShadow = true; }
+  });
+  scene.add(model);
+  frameModel();
+  $('#viewer-message').textContent = `${dae.name} · exportado desde SketchUp`;
+}
+
 $('#license-form').addEventListener('submit', async event => {
   event.preventDefault();
   const message = $('#license-message');
@@ -106,6 +139,12 @@ $('#license-form').addEventListener('submit', async event => {
 $('#model-file').addEventListener('change', event => {
   const file = event.target.files[0];
   if (file) openFile(file).catch(error => { $('#import-message').textContent = error.message; });
+});
+$('#sketchup-folder').addEventListener('change', event => {
+  if (event.target.files.length) openSketchUpExport(event.target.files).catch(error => {
+    $('#import-message').textContent = error.message;
+    $('#import-message').classList.add('error');
+  });
 });
 const dropZone = $('#drop-zone');
 dropZone.addEventListener('dragover', event => { event.preventDefault(); dropZone.classList.add('dragging'); });
