@@ -5,7 +5,7 @@ import worker from './src/worker.js';
 
 const root = new URL('./public/', import.meta.url).pathname;
 const env = { ...process.env };
-const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
+const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 env.ASSETS = { async fetch(request) {
   const url = new URL(request.url);

@@ -1,0 +1,12 @@
+{
+  "name": "MODULAR-3D VIEW",
+  "short_name": "M3D VIEW",
+  "description": "Visualizador móvil de modelos 3D de SketchUp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121417",
+  "theme_color": "#ff6b1a",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

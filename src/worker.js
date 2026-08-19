@@ -135,10 +135,23 @@ async function sha256Hex(value) {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value || '')));
   return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
-async function sharedAccessAllowed(metadata, url) {
+async function sharedAccessAllowed(metadata, request, env) {
+  const url = new URL(request.url);
   if (!metadata || metadata.active === false || (metadata.expiresAt && metadata.expiresAt < Date.now()) || !safeEqual(metadata.shareToken, url.searchParams.get('token'))) return false;
   if (!metadata.passwordHash) return true;
-  return safeEqual(metadata.passwordHash, await sha256Hex(url.searchParams.get('password')));
+  const accessId = parseCookies(request.headers.get('cookie')).m3d_share_access;
+  if (!accessId || !env.SESSIONS) return false;
+  const access = await env.SESSIONS.get(`share-access:${accessId}`, 'json');
+  return Boolean(access && access.modelId === metadata.id && access.expiresAt > Date.now());
+}
+function shareAccessCookie(value, maxAge, secure) {
+  return `m3d_share_access=${value}; Path=/api/shared/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+}
+function clientAddress(request) {
+  return request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+}
+function isAdmin(session, env) {
+  return Boolean(session?.email && env.MASTER_EMAIL && String(session.email).toLowerCase() === String(env.MASTER_EMAIL).toLowerCase());
 }
 
 async function api(request, env) {
@@ -162,6 +175,21 @@ async function api(request, env) {
       storage: storageSummary(models, actualUsedBytes)
     }, 200, { 'cache-control': 'no-store' });
   }
+  if (url.pathname === '/api/admin/summary' && request.method === 'GET') {
+    const session = await getSession(request, env);
+    if (!isAdmin(session, env)) return json({ error: 'forbidden' }, 403);
+    const listed = await env.SESSIONS.list({ prefix: 'model:', limit: 1000 });
+    const models = (await Promise.all(listed.keys.map(item => env.SESSIONS.get(item.name, 'json')))).filter(Boolean);
+    const byOwner = new Map();
+    models.forEach(item => {
+      const owner = String(item.owner || 'sin propietario').toLowerCase();
+      const current = byOwner.get(owner) || { owner, projects: 0, bytes: 0 };
+      current.projects += 1;
+      current.bytes += Number(item.sizeBytes || 0);
+      byOwner.set(owner, current);
+    });
+    return json({ projects: models.length, usedBytes: await bucketUsedBytes(env), owners: [...byOwner.values()].sort((a, b) => b.bytes - a.bytes) }, 200, { 'cache-control': 'no-store' });
+  }
   if (url.pathname === '/api/models/init' && request.method === 'POST') {
     const session = await getSession(request, env);
     if (!session?.licensed) return json({ error: 'license_required' }, 401);
@@ -183,6 +211,7 @@ async function api(request, env) {
       sizeBytes: requestedBytes,
       active: true,
       passwordHash: body.password ? await sha256Hex(String(body.password).slice(0, 64)) : null,
+      permission: ['view', 'measure', 'download'].includes(body.permission) ? body.permission : 'measure',
       expiresAt: Date.now() + Math.min(Math.max(Number(body.expiresDays || 30), 1), 365) * 86400000,
       createdAt: Date.now()
     };
@@ -212,8 +241,8 @@ async function api(request, env) {
     const body = await request.json().catch(() => ({}));
     metadata.files = Array.isArray(body.files) ? body.files.map(file => safeModelPath(typeof file === 'string' ? file : file.path)).filter(Boolean).slice(0, 500) : [];
     if (Array.isArray(body.files)) metadata.sizeBytes = body.files.reduce((total, file) => total + Math.max(0, Number(typeof file === 'object' ? file.size : 0)), 0) || metadata.sizeBytes;
-    metadata.entry = metadata.files.find(file => file.toLowerCase().endsWith('.dae')) || null;
-    if (!metadata.entry) return json({ error: 'dae_required', message: 'No se encontró el archivo DAE del proyecto.' }, 400);
+    metadata.entry = metadata.files.find(file => /\.(glb|gltf|dae)$/i.test(file)) || null;
+    if (!metadata.entry) return json({ error: 'model_required', message: 'No se encontró un archivo GLB, GLTF o DAE válido.' }, 400);
     await env.SESSIONS.put(key, JSON.stringify(metadata));
     return json({ url: `${env.APP_BASE_URL || url.origin}/view/${metadata.id}?token=${metadata.shareToken}` });
   }
@@ -246,16 +275,33 @@ async function api(request, env) {
   const manifestMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/manifest$/);
   if (manifestMatch && request.method === 'GET') {
     const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${manifestMatch[1]}`, 'json') : null;
-    if (!await sharedAccessAllowed(metadata, url)) {
+    if (!await sharedAccessAllowed(metadata, request, env)) {
       if (metadata?.passwordHash && safeEqual(metadata.shareToken, url.searchParams.get('token'))) return json({ error: 'password_required', message: 'Este proyecto requiere contraseña.' }, 401);
       return json({ error: 'not_found', message: 'El enlace no existe, fue desactivado o venció.' }, 404);
     }
-    return json({ id: metadata.id, name: metadata.name, files: metadata.files, entry: metadata.entry });
+    return json({ id: metadata.id, name: metadata.name, files: metadata.files, entry: metadata.entry, permission: metadata.permission || 'measure' }, 200, { 'cache-control': 'no-store' });
+  }
+  const unlockMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/unlock$/);
+  if (unlockMatch && request.method === 'POST') {
+    const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${unlockMatch[1]}`, 'json') : null;
+    const body = await request.json().catch(() => ({}));
+    if (!metadata || metadata.active === false || !safeEqual(metadata.shareToken, body.token)) return json({ error: 'not_found' }, 404);
+    const attemptKey = `share-attempt:${metadata.id}:${clientAddress(request)}`;
+    const attempts = Number(await env.SESSIONS.get(attemptKey) || 0);
+    if (attempts >= 8) return json({ error: 'rate_limited', message: 'Demasiados intentos. Espera 15 minutos.' }, 429, { 'retry-after': '900' });
+    if (!metadata.passwordHash || !safeEqual(metadata.passwordHash, await sha256Hex(body.password))) {
+      await env.SESSIONS.put(attemptKey, String(attempts + 1), { expirationTtl: 900 });
+      return json({ error: 'invalid_password', message: 'Contraseña incorrecta.' }, 401);
+    }
+    await env.SESSIONS.delete(attemptKey);
+    const accessId = id().replace(/-/g, '') + id().replace(/-/g, '');
+    await env.SESSIONS.put(`share-access:${accessId}`, JSON.stringify({ modelId: metadata.id, expiresAt: Date.now() + 3600000 }), { expirationTtl: 3600 });
+    return json({ ok: true }, 200, { 'set-cookie': shareAccessCookie(accessId, 3600, useSecureCookies(request)), 'cache-control': 'no-store' });
   }
   const sharedFileMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/file\/(.+)$/);
   if (sharedFileMatch && request.method === 'GET') {
     const metadata = env.SESSIONS ? await env.SESSIONS.get(`model:${sharedFileMatch[1]}`, 'json') : null;
-    if (!await sharedAccessAllowed(metadata, url) || !env.MODELS) return json({ error: 'not_found' }, 404);
+    if (!await sharedAccessAllowed(metadata, request, env) || !env.MODELS) return json({ error: 'not_found' }, 404);
     const path = safeModelPath(sharedFileMatch[2]);
     if (!path || !metadata.files.includes(path)) return json({ error: 'not_found' }, 404);
     const object = await env.MODELS.get(`models/${metadata.id}/${path}`);
@@ -301,7 +347,7 @@ async function api(request, env) {
   }
   if (url.pathname === '/api/session') {
     const session = await getSession(request, env);
-    return json({ licensed: Boolean(session?.licensed), trimbleConnected: Boolean(session?.accessToken), email: session?.email || null });
+    return json({ licensed: Boolean(session?.licensed), trimbleConnected: Boolean(session?.accessToken), email: session?.email || null, isAdmin: isAdmin(session, env) });
   }
   if (url.pathname === '/api/logout' && request.method === 'POST') {
     const currentSessionId = sessionId(request); await deleteSession(currentSessionId, env);

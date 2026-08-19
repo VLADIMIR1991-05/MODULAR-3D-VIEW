@@ -4,7 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#121417">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>MODULAR-3D VIEW</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -35,6 +38,7 @@
         <section class="storage-card" id="storage-card">
           <div class="storage-heading"><div><strong>Almacenamiento de modelos</strong><p id="storage-text">Calculando espacio utilizado…</p></div><strong id="storage-percent">0%</strong></div>
           <div class="storage-track"><span id="storage-bar"></span></div>
+          <div class="storage-scale"><span>0 GB</span><span>Alerta 8 GB</span><span>Bloqueo 9 GB</span><span>10 GB</span></div>
           <p class="storage-alert" id="storage-alert" hidden></p>
         </section>
         <div class="upload-zone" id="drop-zone">
@@ -48,10 +52,23 @@
         </div>
         <div class="notice-card"><strong>Automatización de SketchUp</strong><p>La extensión MODULAR-3D preparará la versión web sin modificar el .SKP original.</p></div>
         <section class="published-projects"><div class="section-heading"><div><p class="eyebrow">PUBLICADOS</p><h2>Enlaces para celular</h2></div><button class="ghost" id="refresh-projects">Actualizar</button></div><div class="published-list" id="published-list"><p class="muted">Todavía no hay proyectos publicados.</p></div></section>
+        <section class="admin-card" id="admin-card" hidden><div class="section-heading"><div><p class="eyebrow">ADMINISTRACIÓN</p><h2>Panel maestro</h2></div><button class="ghost" id="refresh-admin">Actualizar</button></div><div id="admin-summary"></div></section>
         <p class="message" id="import-message" role="status"></p>
       </section>
       <section class="screen viewer-screen" id="viewer-screen">
-        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><div class="viewer-actions"><input id="share-password" type="password" maxlength="64" placeholder="Contraseña opcional" title="Contraseña opcional del enlace"><select id="share-expiry" title="Duración del enlace"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option><option value="365">1 año</option></select><button class="primary" id="publish-mobile">Publicar para celular</button><button class="ghost" id="fit-model">Encuadrar</button><button class="secondary" id="back-import">Proyectos</button></div></header>
+        <header class="viewer-header"><div><p class="eyebrow">PROYECTO ACTIVO</p><h1 id="viewer-title">Proyecto</h1></div><div class="viewer-actions"><input id="share-password" type="password" maxlength="64" placeholder="Contraseña opcional" title="Contraseña opcional del enlace"><select id="share-expiry" title="Duración del enlace"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option><option value="365">1 año</option></select><select id="share-permission" title="Permisos del enlace"><option value="view">Solo ver</option><option value="measure" selected>Ver y medir</option><option value="download">Ver, medir y capturar</option></select><button class="primary" id="publish-mobile">Publicar para celular</button><button class="ghost" id="fit-model">Encuadrar</button><button class="secondary" id="back-import">Proyectos</button></div></header>
+        <div class="viewer-layout">
+        <aside class="model-panel" id="model-panel">
+          <div class="panel-heading"><strong>Modelo</strong><button id="panel-toggle" title="Cerrar panel">×</button></div>
+          <input id="model-search" type="search" placeholder="Buscar componente…">
+          <div class="selection-summary" id="selection-summary">Ningún objeto seleccionado</div>
+          <div class="component-tree" id="component-tree"></div>
+          <label class="range-control">Explosión <output id="explode-output">0%</output><input id="explode-range" type="range" min="0" max="100" value="0"></label>
+          <label class="range-control">Transparencia <output id="opacity-output">100%</output><input id="opacity-range" type="range" min="10" max="100" value="100"></label>
+          <div class="section-controls"><strong>Corte</strong><select id="section-axis"><option value="none">Desactivado</option><option value="x">Eje X</option><option value="y">Eje Y</option><option value="z">Eje Z</option></select><input id="section-range" type="range" min="-100" max="100" value="0" disabled></div>
+          <div class="panel-actions"><button id="hide-selected">Ocultar</button><button id="isolate-selected">Aislar</button><button id="show-all">Mostrar todo</button></div>
+          <div class="note-editor"><strong>Nota del objeto</strong><textarea id="object-note" rows="3" placeholder="Escribe una observación…"></textarea><button id="save-note">Guardar nota</button></div>
+        </aside>
         <div class="viewer-stage own-viewer" id="viewer-stage" aria-label="Visor 3D interactivo">
           <div class="view-navigator" id="view-navigator" aria-label="Navegador de orientación 3D">
             <button class="nav-arrow nav-up" data-orbit="up" title="Girar hacia arriba">▲</button>
@@ -69,8 +86,12 @@
             <button id="fullscreen-toggle" title="Pantalla completa">Pantalla completa</button>
             <button id="capture-view" title="Guardar imagen de la vista">Captura</button>
             <button id="measure-toggle" title="Medir entre dos puntos">Medir</button>
+            <select id="measure-unit" title="Unidad de medición"><option value="m">m</option><option value="cm">cm</option><option value="mm">mm</option></select>
+            <button id="select-toggle" class="active" title="Seleccionar componentes">Seleccionar</button>
+            <button id="open-model-panel" title="Abrir árbol del modelo">Árbol</button>
             <button id="set-front" title="Definir la orientación actual como frente">Definir frente</button>
           </div>
+        </div>
         </div>
         <div class="viewer-footer"><span><i></i> MODULAR-3D VIEW</span><span id="viewer-message">Arrastra para orbitar · rueda para zoom</span></div>
         <div class="share-panel" id="share-panel" hidden><strong>Enlace para celular</strong><div><input id="share-url" readonly><button class="primary" id="copy-link">Copiar enlace</button></div><p>Abre este enlace en cualquier celular. No compartas el enlace fuera de las personas autorizadas.</p></div>

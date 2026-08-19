@@ -2,6 +2,7 @@ import * as THREE from 'https://esm.sh/three@0.180.0';
 import { OrbitControls } from 'https://esm.sh/three@0.180.0/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders/GLTFLoader.js';
 import { ColladaLoader } from 'https://esm.sh/three@0.180.0/examples/jsm/loaders/ColladaLoader.js';
+import { GLTFExporter } from 'https://esm.sh/three@0.180.0/examples/jsm/exporters/GLTFExporter.js';
 
 const screens = ['license', 'import', 'viewer'];
 const $ = selector => document.querySelector(selector);
@@ -14,6 +15,15 @@ let darkBackground = true;
 let measureMode = false;
 let measurePoints = [];
 let measurementObjects = [];
+let selectionMode = true;
+let selectedObject = null;
+let selectionHelper = null;
+let sourceUnit = 'm';
+let sectionPlane = null;
+const originalMeshState = new Map();
+const objectNotes = new Map();
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
 
 function show(name) {
   screens.forEach(item => {
@@ -42,7 +52,7 @@ function initializeViewer() {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   stage.prepend(renderer.domElement);
-  renderer.domElement.addEventListener('pointerdown', handleMeasurementClick);
+  renderer.domElement.addEventListener('pointerdown', handleCanvasClick);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.addEventListener('change', updateNavigator);
@@ -68,6 +78,73 @@ function initializeViewer() {
     controls.update();
     renderer.render(scene, camera);
   });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
+function modelMeshes() {
+  const meshes = [];
+  model?.traverse(item => { if (item.isMesh) meshes.push(item); });
+  return meshes;
+}
+
+function rememberModelState() {
+  originalMeshState.clear();
+  modelMeshes().forEach((mesh, index) => {
+    mesh.userData.m3dId = mesh.userData.m3dId || `mesh-${index}`;
+    mesh.userData.m3dName = mesh.name || mesh.parent?.name || `Componente ${index + 1}`;
+    originalMeshState.set(mesh, {
+      position: mesh.position.clone(),
+      visible: mesh.visible,
+      materials: (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).map(material => ({ material, opacity: material.opacity, transparent: material.transparent, clippingPlanes: material.clippingPlanes }))
+    });
+  });
+  buildComponentTree();
+}
+
+function buildComponentTree(filter = '') {
+  const tree = $('#component-tree');
+  if (!tree) return;
+  const term = filter.trim().toLowerCase();
+  const meshes = modelMeshes().filter(mesh => !term || mesh.userData.m3dName.toLowerCase().includes(term));
+  tree.innerHTML = meshes.length ? meshes.map(mesh => `<button data-mesh-id="${escapeHtml(mesh.userData.m3dId)}" class="${mesh === selectedObject ? 'active' : ''}"><span>${mesh.visible ? '◈' : '◇'}</span>${escapeHtml(mesh.userData.m3dName)}</button>`).join('') : '<p class="muted">Sin coincidencias</p>';
+}
+
+function selectObject(object) {
+  if (selectionHelper) scene.remove(selectionHelper);
+  selectedObject = object?.isMesh ? object : null;
+  if (selectedObject) {
+    selectionHelper = new THREE.BoxHelper(selectedObject, 0xff6b1a);
+    selectionHelper.material.depthTest = false;
+    selectionHelper.renderOrder = 999;
+    scene.add(selectionHelper);
+    $('#selection-summary').textContent = selectedObject.userData.m3dName;
+    $('#object-note').value = objectNotes.get(selectedObject.userData.m3dId) || '';
+    const material = Array.isArray(selectedObject.material) ? selectedObject.material[0] : selectedObject.material;
+    $('#opacity-range').value = Math.round((material?.opacity ?? 1) * 100);
+    $('#opacity-output').value = `${$('#opacity-range').value}%`;
+  } else {
+    selectionHelper = null;
+    $('#selection-summary').textContent = 'Ningún objeto seleccionado';
+    $('#object-note').value = '';
+  }
+  buildComponentTree($('#model-search')?.value || '');
+}
+
+function pointerHit(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  return raycaster.intersectObjects(modelMeshes().filter(mesh => mesh.visible), false)[0] || null;
+}
+
+function handleCanvasClick(event) {
+  if (!model) return;
+  if (measureMode) return handleMeasurementClick(event);
+  if (!selectionMode) return;
+  selectObject(pointerHit(event)?.object || null);
 }
 
 function frameModel() {
@@ -118,6 +195,26 @@ function switchProjection(mode) {
   $('#projection-toggle').classList.toggle('active', camera.isOrthographicCamera);
 }
 
+function fitOrthographicToModel(margin = 1.12) {
+  if (!model || !camera?.isOrthographicCamera) return;
+  const box = new THREE.Box3().setFromObject(model);
+  const points = [];
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) points.push(new THREE.Vector3(x, y, z).applyMatrix4(camera.matrixWorldInverse));
+  const minX = Math.min(...points.map(point => point.x));
+  const maxX = Math.max(...points.map(point => point.x));
+  const minY = Math.min(...points.map(point => point.y));
+  const maxY = Math.max(...points.map(point => point.y));
+  const width = Math.max((maxX - minX) * margin, .01);
+  const height = Math.max((maxY - minY) * margin, .01);
+  const aspect = $('#viewer-stage').clientWidth / $('#viewer-stage').clientHeight;
+  const viewHeight = Math.max(height, width / aspect);
+  camera.left = -viewHeight * aspect / 2;
+  camera.right = viewHeight * aspect / 2;
+  camera.top = viewHeight / 2;
+  camera.bottom = -viewHeight / 2;
+  camera.updateProjectionMatrix();
+}
+
 function calibratedDirection(direction) {
   return direction.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), frontOffset);
 }
@@ -148,7 +245,10 @@ function handleMeasurementClick(event) {
     const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xff6b1a }));
     scene.add(line);
     measurementObjects.push(line);
-    $('#viewer-message').textContent = `Distancia: ${measurePoints[0].distanceTo(measurePoints[1]).toFixed(3)} unidades del modelo`;
+    const meters = measurePoints[0].distanceTo(measurePoints[1]) * (sourceUnit === 'mm' ? .001 : sourceUnit === 'cm' ? .01 : 1);
+    const unit = $('#measure-unit').value;
+    const value = unit === 'mm' ? meters * 1000 : unit === 'cm' ? meters * 100 : meters;
+    $('#viewer-message').textContent = `Distancia: ${value.toFixed(unit === 'm' ? 3 : 1)} ${unit}`;
   } else $('#viewer-message').textContent = 'Selecciona el segundo punto de medición.';
 }
 
@@ -166,6 +266,7 @@ function moveCameraTo(direction, duration = 360) {
     camera.up.set(0, 1, 0);
     camera.lookAt(target);
     controls.update();
+    fitOrthographicToModel();
     return;
   }
   const start = camera.position.clone();
@@ -181,6 +282,7 @@ function moveCameraTo(direction, duration = 360) {
     camera.lookAt(controls.target);
     controls.update();
     if (progress < 1) requestAnimationFrame(animateMove);
+    else fitOrthographicToModel();
   };
   requestAnimationFrame(animateMove);
 }
@@ -299,10 +401,13 @@ async function openFile(file) {
   $('#viewer-message').textContent = 'Cargando geometría y materiales…';
   const gltf = await new GLTFLoader().loadAsync(objectUrl);
   model = gltf.scene;
+  currentFiles = [file];
+  sourceUnit = 'm';
   model.traverse(item => {
     if (item.isMesh) { item.castShadow = true; item.receiveShadow = true; }
   });
   scene.add(model);
+  rememberModelState();
   frameModel();
   $('#viewer-message').textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)} MB`;
 }
@@ -332,10 +437,12 @@ async function openSketchUpExport(fileList) {
   const text = await dae.text();
   const collada = new ColladaLoader(manager).parse(text, '');
   model = collada.scene;
+  sourceUnit = 'm';
   model.traverse(item => {
     if (item.isMesh) { item.castShadow = true; item.receiveShadow = true; }
   });
   scene.add(model);
+  rememberModelState();
   frameModel();
   $('#viewer-message').textContent = `${dae.name} · exportado desde SketchUp`;
 }
@@ -349,18 +456,25 @@ async function loadSharedModel() {
   initializeViewer();
   $('#publish-mobile').hidden = true;
   $('#share-expiry').hidden = true;
+  $('#share-permission').hidden = true;
   $('#share-password').hidden = true;
   $('#back-import').hidden = true;
   $('#viewer-message').textContent = 'Descargando proyecto compartido…';
-  let password = '';
   let manifestResponse = await fetch(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}`);
   if (manifestResponse.status === 401) {
-    password = prompt('Este proyecto está protegido. Ingresa la contraseña:') || '';
-    manifestResponse = await fetch(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}&password=${encodeURIComponent(password)}`);
+    const password = prompt('Este proyecto está protegido. Ingresa la contraseña:') || '';
+    const unlock = await fetch(`/api/shared/${match[1]}/unlock`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, password }) });
+    if (!unlock.ok) throw new Error((await unlock.json().catch(() => ({}))).message || 'Contraseña incorrecta.');
+    manifestResponse = await fetch(`/api/shared/${match[1]}/manifest?token=${encodeURIComponent(token)}`);
   }
   const manifest = await manifestResponse.json().catch(() => ({}));
   if (!manifestResponse.ok) throw new Error(manifest.message || 'No se pudo abrir el proyecto compartido.');
-  const accessQuery = `token=${encodeURIComponent(token)}${password ? `&password=${encodeURIComponent(password)}` : ''}`;
+  if (manifest.permission === 'view') {
+    $('#measure-toggle').hidden = true;
+    $('#measure-unit').hidden = true;
+  }
+  if (manifest.permission !== 'download') $('#capture-view').hidden = true;
+  const accessQuery = `token=${encodeURIComponent(token)}`;
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(url => {
     const clean = decodeURIComponent(url).replace(/^\.\//, '');
@@ -370,13 +484,29 @@ async function loadSharedModel() {
   const entryUrl = `/api/shared/${manifest.id}/file/${manifest.entry.split('/').map(encodeURIComponent).join('/')}?${accessQuery}`;
   const response = await fetch(entryUrl);
   if (!response.ok) throw new Error('No se pudo descargar el modelo compartido.');
-  const collada = new ColladaLoader(manager).parse(await response.text(), '');
-  model = collada.scene;
+  if (/\.glb$/i.test(manifest.entry)) {
+    const blobUrl = URL.createObjectURL(await response.blob());
+    model = (await new GLTFLoader(manager).loadAsync(blobUrl)).scene;
+    URL.revokeObjectURL(blobUrl);
+  } else if (/\.gltf$/i.test(manifest.entry)) {
+    model = (await new GLTFLoader(manager).parseAsync(await response.text(), '')).scene;
+  } else {
+    model = new ColladaLoader(manager).parse(await response.text(), '').scene;
+  }
+  model.traverse(item => { if (item.isMesh) { item.castShadow = true; item.receiveShadow = true; } });
   scene.add(model);
+  rememberModelState();
   $('#viewer-title').textContent = manifest.name;
   frameModel();
   $('#viewer-message').textContent = 'Proyecto compartido · MODULAR-3D VIEW';
   return true;
+}
+
+async function optimizedGlbFile() {
+  if (!model) throw new Error('No hay un modelo cargado.');
+  $('#viewer-message').textContent = 'Optimizando el modelo a un solo archivo GLB…';
+  const data = await new GLTFExporter().parseAsync(model, { binary: true, onlyVisible: false, trs: false });
+  return new File([data], `${$('#viewer-title').textContent || 'modelo'}.glb`, { type: 'model/gltf-binary' });
 }
 
 function formatBytes(bytes) {
@@ -423,6 +553,17 @@ async function loadPublishedProjects() {
   }
 }
 
+async function loadAdminSummary() {
+  const card = $('#admin-card');
+  try {
+    const data = await request('/api/admin/summary');
+    card.hidden = false;
+    $('#admin-summary').innerHTML = `<p><strong>${data.projects}</strong> proyectos · <strong>${formatBytes(data.usedBytes)}</strong> en R2</p><div class="admin-owners">${data.owners.map(owner => `<div><span>${escapeHtml(owner.owner)}</span><strong>${owner.projects} · ${formatBytes(owner.bytes)}</strong></div>`).join('')}</div>`;
+  } catch (error) {
+    if (error.message !== 'forbidden') $('#admin-summary').textContent = error.message;
+  }
+}
+
 async function publishForMobile() {
   if (!currentFiles.length) throw new Error('Abre primero una exportación de SketchUp.');
   const button = $('#publish-mobile');
@@ -430,19 +571,20 @@ async function publishForMobile() {
   const original = button.textContent;
   let created;
   try {
-    const dae = currentFiles.find(file => file.name.toLowerCase().endsWith('.dae'));
-    const totalSize = currentFiles.reduce((total, file) => total + file.size, 0);
+    const publishFile = currentFiles.length === 1 && /\.glb$/i.test(currentFiles[0].name) ? currentFiles[0] : await optimizedGlbFile();
+    const filesToUpload = [publishFile];
+    const totalSize = publishFile.size;
     created = await request('/api/models/init', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: dae ? dae.name.replace(/\.dae$/i, '') : 'Proyecto', totalSize, expiresDays: Number($('#share-expiry').value), password: $('#share-password').value })
+      body: JSON.stringify({ name: $('#viewer-title').textContent || 'Proyecto', totalSize, expiresDays: Number($('#share-expiry').value), password: $('#share-password').value, permission: $('#share-permission').value })
     });
     const paths = [];
-    for (let index = 0; index < currentFiles.length; index += 1) {
-      const file = currentFiles[index];
+    for (let index = 0; index < filesToUpload.length; index += 1) {
+      const file = filesToUpload[index];
       const path = (file.webkitRelativePath || file.name).split('/').slice(1).join('/') || file.name;
       paths.push({ path, size: file.size });
-      button.textContent = `Subiendo ${index + 1} de ${currentFiles.length}…`;
+      button.textContent = `Subiendo ${index + 1} de ${filesToUpload.length}…`;
       const response = await fetch(`/api/models/${created.id}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
         method: 'PUT',
         headers: { 'content-type': file.type || 'application/octet-stream' },
@@ -515,6 +657,7 @@ $('#copy-link').addEventListener('click', async () => {
 });
 $('#back-import').addEventListener('click', () => { show('import'); loadPublishedProjects(); });
 $('#refresh-projects').addEventListener('click', loadPublishedProjects);
+$('#refresh-admin').addEventListener('click', loadAdminSummary);
 $('#published-list').addEventListener('click', async event => {
   const button = event.target.closest('[data-action]');
   const card = event.target.closest('[data-model-id]');
@@ -546,6 +689,70 @@ $('#published-list').addEventListener('click', async event => {
     await loadPublishedProjects();
   } catch (error) { alert(error.message); }
 });
+$('#model-search').addEventListener('input', event => buildComponentTree(event.target.value));
+$('#component-tree').addEventListener('click', event => {
+  const button = event.target.closest('[data-mesh-id]');
+  if (!button) return;
+  selectObject(modelMeshes().find(mesh => mesh.userData.m3dId === button.dataset.meshId));
+});
+$('#hide-selected').addEventListener('click', () => {
+  if (!selectedObject) return;
+  selectedObject.visible = false;
+  selectObject(null);
+  buildComponentTree($('#model-search').value);
+});
+$('#isolate-selected').addEventListener('click', () => {
+  if (!selectedObject) return;
+  modelMeshes().forEach(mesh => { mesh.visible = mesh === selectedObject; });
+  buildComponentTree($('#model-search').value);
+});
+$('#show-all').addEventListener('click', () => {
+  modelMeshes().forEach(mesh => { mesh.visible = true; });
+  buildComponentTree($('#model-search').value);
+});
+$('#opacity-range').addEventListener('input', event => {
+  const opacity = Number(event.target.value) / 100;
+  $('#opacity-output').value = `${event.target.value}%`;
+  if (!selectedObject) return;
+  (Array.isArray(selectedObject.material) ? selectedObject.material : [selectedObject.material]).forEach(material => {
+    material.transparent = opacity < 1;
+    material.opacity = opacity;
+    material.needsUpdate = true;
+  });
+});
+$('#explode-range').addEventListener('input', event => {
+  const amount = Number(event.target.value) / 100;
+  $('#explode-output').value = `${event.target.value}%`;
+  const center = modelCenter();
+  const scale = modelMaximumSize() * .55 * amount;
+  originalMeshState.forEach((state, mesh) => {
+    const worldCenter = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+    const direction = worldCenter.sub(center).normalize();
+    mesh.position.copy(state.position).add(direction.multiplyScalar(scale));
+  });
+  selectionHelper?.update();
+});
+$('#section-axis').addEventListener('change', event => {
+  const axis = event.target.value;
+  $('#section-range').disabled = axis === 'none';
+  sectionPlane = axis === 'none' ? null : new THREE.Plane(new THREE.Vector3(axis === 'x' ? -1 : 0, axis === 'y' ? -1 : 0, axis === 'z' ? -1 : 0), 0);
+  renderer.localClippingEnabled = Boolean(sectionPlane);
+  modelMeshes().forEach(mesh => (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach(material => { material.clippingPlanes = sectionPlane ? [sectionPlane] : []; material.needsUpdate = true; }));
+});
+$('#section-range').addEventListener('input', event => {
+  if (sectionPlane) sectionPlane.constant = modelMaximumSize() * Number(event.target.value) / 200;
+});
+$('#save-note').addEventListener('click', () => {
+  if (!selectedObject) return alert('Selecciona primero un componente.');
+  objectNotes.set(selectedObject.userData.m3dId, $('#object-note').value.trim());
+  $('#viewer-message').textContent = 'Nota guardada en este dispositivo.';
+});
+$('#select-toggle').addEventListener('click', event => {
+  selectionMode = !selectionMode;
+  event.currentTarget.classList.toggle('active', selectionMode);
+});
+$('#open-model-panel').addEventListener('click', () => $('#model-panel').classList.add('open'));
+$('#panel-toggle').addEventListener('click', () => $('#model-panel').classList.remove('open'));
 $('#projection-toggle').addEventListener('click', () => switchProjection(camera?.isOrthographicCamera ? 'perspective' : 'orthographic'));
 $('#grid-toggle').addEventListener('click', event => {
   gridHelper.visible = !gridHelper.visible;
@@ -592,6 +799,7 @@ $('#set-front').addEventListener('click', () => {
 });
 $('#logout').addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }); show('license'); });
 initializeNavigator();
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 loadSharedModel().catch(error => {
   show('viewer');
   $('#viewer-message').textContent = error.message;
@@ -602,6 +810,7 @@ loadSharedModel().catch(error => {
       $('#profile-email').textContent = session.email || 'Usuario autorizado';
       show('import');
       loadPublishedProjects();
+      if (session.isAdmin) loadAdminSummary();
     }
   });
 }).catch(() => {});

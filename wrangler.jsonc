@@ -12,6 +12,7 @@
   },
   "vars": {
     "APP_BASE_URL": "https://modular-3d-view.lenin19910527.workers.dev",
+    "MASTER_EMAIL": "desarrollo@modular-3d.com",
     "TRIMBLE_REGION": "us"
   },
   "kv_namespaces": [
