@@ -8,7 +8,7 @@ module Modular3D
       File.join('modular_3d_view', 'main')
     )
     EXTENSION.description = 'Prepara modelos SketchUp para MODULAR-3D VIEW sin modificar el archivo SKP original.'
-    EXTENSION.version = '0.1.1'
+    EXTENSION.version = '0.2.0'
     EXTENSION.creator = 'MODULAR-3D'
     Sketchup.register_extension(EXTENSION, true)
   end

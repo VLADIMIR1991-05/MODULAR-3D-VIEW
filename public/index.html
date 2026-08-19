@@ -61,6 +61,7 @@
         <aside class="model-panel" id="model-panel">
           <div class="panel-heading"><strong>Modelo</strong><button id="panel-toggle" title="Cerrar panel">×</button></div>
           <input id="model-search" type="search" placeholder="Buscar componente…">
+          <div class="model-health" id="model-health"><span>Diagnóstico</span><strong>Esperando modelo…</strong></div>
           <div class="selection-summary" id="selection-summary">Ningún objeto seleccionado</div>
           <div class="piece-properties" id="piece-properties" hidden>
             <div><span>Largo</span><strong id="piece-length">—</strong></div>
@@ -69,10 +70,10 @@
             <div><span>Material</span><strong id="piece-material">—</strong></div>
           </div>
           <div class="component-tree" id="component-tree"></div>
-          <label class="range-control">Separación de explosión <output id="explode-output">0%</output><input id="explode-range" type="range" min="0" max="500" step="10" value="0"></label>
+          <label class="range-control">Separación de explosión <output id="explode-output">0%</output><input id="explode-range" type="range" min="0" max="700" step="10" value="0"></label>
           <label class="range-control">Transparencia <output id="opacity-output">100%</output><input id="opacity-range" type="range" min="10" max="100" value="100"></label>
           <div class="section-controls"><strong>Corte</strong><select id="section-axis"><option value="none">Desactivado</option><option value="x">Eje X</option><option value="y">Eje Y</option><option value="z">Eje Z</option></select><input id="section-range" type="range" min="-100" max="100" value="0" disabled></div>
-          <div class="panel-actions"><button id="hide-selected">Ocultar</button><button id="isolate-selected">Aislar</button><button id="show-all">Mostrar todo</button></div>
+          <div class="panel-actions"><button id="hide-selected">Ocultar</button><button id="isolate-selected">Aislar</button><button id="isolate-same">Aislar iguales</button><button id="show-all">Mostrar todo</button></div>
           <div class="note-editor"><strong>Nota del objeto</strong><textarea id="object-note" rows="3" placeholder="Escribe una observación…"></textarea><button id="save-note">Guardar nota</button></div>
         </aside>
         <div class="viewer-stage own-viewer" id="viewer-stage" aria-label="Visor 3D interactivo">

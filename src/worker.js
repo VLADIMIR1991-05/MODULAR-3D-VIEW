@@ -77,6 +77,9 @@ function safeModelPath(value) {
   if (!decoded || decoded.includes('..') || decoded.startsWith('/')) return null;
   return decoded.split('/').filter(Boolean).map(part => part.replace(/[^0-9A-Za-z._ -]/g, '_')).join('/');
 }
+function normalizedProjectKey(value) {
+  return String(value || 'Proyecto').trim().toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi, '-').replace(/^-|-$/g, '').slice(0, 100) || 'proyecto';
+}
 
 const FREE_BYTES = 10 * 1024 ** 3;
 const WARNING_BYTES = 8 * 1024 ** 3;
@@ -171,7 +174,7 @@ async function api(request, env) {
     const models = await getOwnedModels(session.email, env);
     const actualUsedBytes = await bucketUsedBytes(env);
     return json({
-      models: models.map(model => ({ id: model.id, name: model.name, sizeBytes: model.sizeBytes || 0, createdAt: model.createdAt, expiresAt: model.expiresAt || null, active: model.active !== false && (!model.expiresAt || model.expiresAt > Date.now()), url: `${env.APP_BASE_URL || url.origin}/view/${model.id}?token=${model.shareToken}` })),
+      models: models.map(model => ({ id: model.id, name: model.name, version: model.version || 1, projectKey: model.projectKey || normalizedProjectKey(model.name), sizeBytes: model.sizeBytes || 0, createdAt: model.createdAt, expiresAt: model.expiresAt || null, active: model.active !== false && (!model.expiresAt || model.expiresAt > Date.now()), url: `${env.APP_BASE_URL || url.origin}/view/${model.id}?token=${model.shareToken}` })),
       storage: storageSummary(models, actualUsedBytes)
     }, 200, { 'cache-control': 'no-store' });
   }
@@ -202,9 +205,14 @@ async function api(request, env) {
     if (storage.usedBytes + requestedBytes > SAFE_LIMIT_BYTES) return json({ error: 'storage_limit', message: 'La publicación superaría el límite preventivo de 9 GB. Elimina proyectos antiguos antes de continuar.' }, 413);
     const modelId = id();
     const shareToken = id().replace(/-/g, '') + id().replace(/-/g, '');
+    const name = String(body.name || 'Proyecto').slice(0, 120);
+    const projectKey = normalizedProjectKey(name);
+    const version = Math.max(0, ...ownedModels.filter(model => (model.projectKey || normalizedProjectKey(model.name)) === projectKey).map(model => Number(model.version || 1))) + 1;
     const metadata = {
       id: modelId,
-      name: String(body.name || 'Proyecto').slice(0, 120),
+      name,
+      projectKey,
+      version,
       owner: session.email,
       shareToken,
       files: [],
@@ -217,7 +225,7 @@ async function api(request, env) {
     };
     await env.SESSIONS.put(`model:${modelId}`, JSON.stringify(metadata));
     await putOwnerModelIds(session.email, [...await getOwnerModelIds(session.email, env), modelId], env);
-    return json({ id: modelId, storage: { ...storage, projectedBytes: storage.usedBytes + requestedBytes } });
+    return json({ id: modelId, version, storage: { ...storage, projectedBytes: storage.usedBytes + requestedBytes } });
   }
   const uploadMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/files\/(.+)$/);
   if (uploadMatch && request.method === 'PUT') {
@@ -279,7 +287,7 @@ async function api(request, env) {
       if (metadata?.passwordHash && safeEqual(metadata.shareToken, url.searchParams.get('token'))) return json({ error: 'password_required', message: 'Este proyecto requiere contraseña.' }, 401);
       return json({ error: 'not_found', message: 'El enlace no existe, fue desactivado o venció.' }, 404);
     }
-    return json({ id: metadata.id, name: metadata.name, files: metadata.files, entry: metadata.entry, permission: metadata.permission || 'measure' }, 200, { 'cache-control': 'no-store' });
+    return json({ id: metadata.id, name: metadata.name, version: metadata.version || 1, files: metadata.files, entry: metadata.entry, permission: metadata.permission || 'measure' }, 200, { 'cache-control': 'no-store' });
   }
   const unlockMatch = url.pathname.match(/^\/api\/shared\/([^/]+)\/unlock$/);
   if (unlockMatch && request.method === 'POST') {

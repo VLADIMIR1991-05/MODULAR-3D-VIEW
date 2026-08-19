@@ -62,7 +62,8 @@ test('publishes, accounts for, and deletes an R2 model', async () => {
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const init = await worker.fetch(new Request('https://example.com/api/models/init', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Prueba', totalSize: 4, expiresDays: 30, password: 'secreto', permission: 'measure' }) }), testEnv);
   assert.equal(init.status, 200);
-  const { id } = await init.json();
+  const { id, version } = await init.json();
+  assert.equal(version, 1);
   const upload = await worker.fetch(new Request(`https://example.com/api/models/${id}/files/model.glb`, { method: 'PUT', headers: { cookie, 'content-type': 'model/gltf-binary' }, body: 'test' }), testEnv);
   assert.equal(upload.status, 200);
   const finalize = await worker.fetch(new Request(`https://example.com/api/models/${id}/finalize`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ files: [{ path: 'model.glb', size: 4 }] }) }), testEnv);
@@ -80,6 +81,13 @@ test('publishes, accounts for, and deletes an R2 model', async () => {
   const listing = await worker.fetch(new Request('https://example.com/api/models', { headers: { cookie } }), testEnv);
   const listed = await listing.json();
   assert.equal(listed.models[0].sizeBytes, 4);
+  assert.equal(listed.models[0].version, 1);
+  const secondInit = await worker.fetch(new Request('https://example.com/api/models/init', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Prueba', totalSize: 0 }) }), testEnv);
+  assert.equal(secondInit.status, 200);
+  const second = await secondInit.json();
+  assert.equal(second.version, 2);
+  const removeSecond = await worker.fetch(new Request(`https://example.com/api/models/${second.id}`, { method: 'DELETE', headers: { cookie } }), testEnv);
+  assert.equal(removeSecond.status, 200);
   const removed = await worker.fetch(new Request(`https://example.com/api/models/${id}`, { method: 'DELETE', headers: { cookie } }), testEnv);
   assert.equal(removed.status, 200);
   assert.equal(objects.size, 0);

@@ -26,6 +26,13 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let originalModelCenter = new THREE.Vector3();
 let originalModelSize = new THREE.Vector3();
+let technicalMetadata = null;
+let needsRender = true;
+const mobileDevice = matchMedia('(max-width: 700px), (pointer: coarse)').matches;
+
+function requestRender() {
+  needsRender = true;
+}
 
 function show(name) {
   screens.forEach(item => {
@@ -49,17 +56,19 @@ function initializeViewer() {
   camera = new THREE.PerspectiveCamera(45, stage.clientWidth / stage.clientHeight, 0.01, 100000);
   camera.position.set(6, 4, 7);
   renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const normalPixelRatio = Math.min(devicePixelRatio, mobileDevice ? 1.25 : 1.75);
+  renderer.setPixelRatio(normalPixelRatio);
   renderer.setSize(stage.clientWidth, stage.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = !mobileDevice;
+  $('#shadow-toggle')?.classList.toggle('active', renderer.shadowMap.enabled);
   stage.prepend(renderer.domElement);
   renderer.domElement.addEventListener('pointerdown', handleCanvasClick);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.addEventListener('change', updateNavigator);
-  controls.addEventListener('start', () => renderer.setPixelRatio(1));
-  controls.addEventListener('end', () => renderer.setPixelRatio(Math.min(devicePixelRatio, 2)));
+  controls.addEventListener('change', () => { updateNavigator(); requestRender(); });
+  controls.addEventListener('start', () => { renderer.setPixelRatio(1); requestRender(); });
+  controls.addEventListener('end', () => { renderer.setPixelRatio(normalPixelRatio); requestRender(); });
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 2.5));
   const sun = new THREE.DirectionalLight(0xffffff, 3);
   sun.position.set(8, 12, 6);
@@ -75,10 +84,14 @@ function initializeViewer() {
     }
     camera.updateProjectionMatrix();
     renderer.setSize(stage.clientWidth, stage.clientHeight, false);
+    requestRender();
   }).observe(stage);
   renderer.setAnimationLoop(() => {
-    controls.update();
+    if (document.hidden) return;
+    const controlsChanged = controls.update();
+    if (!controlsChanged && !needsRender) return;
     renderer.render(scene, camera);
+    needsRender = false;
   });
 }
 
@@ -92,11 +105,47 @@ function modelMeshes() {
   return meshes;
 }
 
+function normalizedName(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi, ' ');
+}
+
+async function readMetadataFile(file) {
+  if (!file) return null;
+  try {
+    const data = JSON.parse(await file.text());
+    return data?.schema === 'modular-3d-view-metadata' && Array.isArray(data.pieces) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyTechnicalMetadata() {
+  const pieces = Array.isArray(technicalMetadata?.pieces) ? technicalMetadata.pieces : [];
+  if (!pieces.length) return;
+  const queues = new Map();
+  pieces.forEach(piece => {
+    [piece.name, piece.definition, piece.path?.[piece.path.length - 1]].filter(Boolean).forEach(value => {
+      const key = normalizedName(value);
+      if (!queues.has(key)) queues.set(key, []);
+      if (!queues.get(key).includes(piece)) queues.get(key).push(piece);
+    });
+  });
+  modelMeshes().forEach(mesh => {
+    const names = [mesh.name, mesh.parent?.name, mesh.parent?.parent?.name].map(normalizedName).filter(Boolean);
+    const piece = names.map(name => queues.get(name)?.[0]).find(Boolean);
+    if (!piece) return;
+    mesh.userData.m3dMeta = piece;
+    mesh.userData.m3dId = piece.id;
+    mesh.userData.m3dName = piece.name;
+  });
+}
+
 function rememberModelState() {
   originalMeshState.clear();
   const modelBox = new THREE.Box3().setFromObject(model);
   originalModelCenter = modelBox.getCenter(new THREE.Vector3());
   originalModelSize = modelBox.getSize(new THREE.Vector3());
+  applyTechnicalMetadata();
   modelMeshes().forEach((mesh, index) => {
     mesh.userData.m3dId = mesh.userData.m3dId || `mesh-${index}`;
     mesh.userData.m3dName = mesh.name || mesh.parent?.name || `Componente ${index + 1}`;
@@ -108,12 +157,62 @@ function rememberModelState() {
     });
   });
   buildComponentTree();
+  updateModelHealth();
+}
+
+function updateModelHealth() {
+  if (!model) return;
+  let triangles = 0;
+  const materials = new Set();
+  const textures = new Set();
+  const meshes = modelMeshes();
+  meshes.forEach(mesh => {
+    const geometry = mesh.geometry;
+    triangles += geometry?.index ? geometry.index.count / 3 : (geometry?.attributes?.position?.count || 0) / 3;
+    (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).filter(Boolean).forEach(material => {
+      materials.add(material.uuid);
+      if (material.map) textures.add(material.map.uuid);
+    });
+  });
+  const weight = currentFiles.reduce((total, file) => total + Number(file.size || 0), 0);
+  const heavy = triangles > 1_000_000 || textures.size > 30 || weight > 100 * 1024 * 1024;
+  const medium = triangles > 300_000 || textures.size > 15 || weight > 40 * 1024 * 1024;
+  const level = heavy ? 'Pesado' : medium ? 'Medio' : 'Ligero';
+  const health = $('#model-health');
+  health.dataset.level = level.toLowerCase();
+  health.innerHTML = `<span>${level} · ${meshes.length} piezas</span><strong>${Math.round(triangles).toLocaleString('es-EC')} triángulos · ${textures.size} texturas</strong>`;
+  if (heavy && renderer.shadowMap.enabled) {
+    renderer.shadowMap.enabled = false;
+    $('#shadow-toggle').classList.remove('active');
+  }
+}
+
+function assessModelForPublishing() {
+  const meshes = modelMeshes();
+  if (!meshes.length) return { blocked: true, message: 'El modelo no contiene piezas publicables.' };
+  let triangles = 0;
+  let missingMaterials = 0;
+  meshes.forEach(mesh => {
+    triangles += mesh.geometry?.index ? mesh.geometry.index.count / 3 : (mesh.geometry?.attributes?.position?.count || 0) / 3;
+    if (!mesh.userData.m3dMeta?.material && !String((Array.isArray(mesh.material) ? mesh.material[0] : mesh.material)?.name || '').trim()) missingMaterials += 1;
+  });
+  const warnings = [];
+  if (!technicalMetadata) warnings.push('no contiene metadatos técnicos del RBZ Pro');
+  if (missingMaterials) warnings.push(`${missingMaterials} piezas no tienen material identificado`);
+  if (triangles > 1_000_000) warnings.push('el modelo supera un millón de triángulos y puede tardar en celulares');
+  return { blocked: false, warnings, message: warnings.join('; ') };
 }
 
 function displayLength(modelUnits) {
   const meters = Number(modelUnits || 0) * (sourceUnit === 'mm' ? .001 : sourceUnit === 'cm' ? .01 : 1);
   const unit = $('#measure-unit')?.value || 'mm';
   const value = unit === 'mm' ? meters * 1000 : unit === 'cm' ? meters * 100 : meters;
+  return `${value.toFixed(unit === 'm' ? 3 : unit === 'cm' ? 1 : 0)} ${unit}`;
+}
+
+function displayMillimeters(millimeters) {
+  const unit = $('#measure-unit')?.value || 'mm';
+  const value = unit === 'm' ? Number(millimeters || 0) / 1000 : unit === 'cm' ? Number(millimeters || 0) / 10 : Number(millimeters || 0);
   return `${value.toFixed(unit === 'm' ? 3 : unit === 'cm' ? 1 : 0)} ${unit}`;
 }
 
@@ -135,16 +234,24 @@ function updatePieceProperties(mesh) {
     panel.hidden = true;
     return;
   }
+  const metadata = mesh.userData.m3dMeta;
   const dimensions = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3()).toArray().sort((a, b) => b - a);
-  $('#piece-length').textContent = displayLength(dimensions[0]);
-  $('#piece-width').textContent = displayLength(dimensions[1]);
-  $('#piece-thickness').textContent = displayLength(dimensions[2]);
-  $('#piece-material').textContent = materialDescription(mesh);
+  $('#piece-length').textContent = metadata ? displayMillimeters(metadata.length_mm) : displayLength(dimensions[0]);
+  $('#piece-width').textContent = metadata ? displayMillimeters(metadata.width_mm) : displayLength(dimensions[1]);
+  $('#piece-thickness').textContent = metadata ? displayMillimeters(metadata.thickness_mm) : displayLength(dimensions[2]);
+  $('#piece-material').textContent = metadata?.material || materialDescription(mesh);
   panel.hidden = false;
 }
 
 function updateModuleDimensions() {
   if (!model) return;
+  const project = technicalMetadata?.project;
+  if (project?.width_mm != null) {
+    $('#module-width').textContent = displayMillimeters(project.width_mm);
+    $('#module-height').textContent = displayMillimeters(project.height_mm);
+    $('#module-depth').textContent = displayMillimeters(project.depth_mm);
+    return;
+  }
   const size = originalModelSize.lengthSq() ? originalModelSize : new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
   $('#module-width').textContent = displayLength(size.x);
   $('#module-height').textContent = displayLength(size.y);
@@ -155,8 +262,17 @@ function buildComponentTree(filter = '') {
   const tree = $('#component-tree');
   if (!tree) return;
   const term = filter.trim().toLowerCase();
-  const meshes = modelMeshes().filter(mesh => !term || mesh.userData.m3dName.toLowerCase().includes(term));
-  tree.innerHTML = meshes.length ? meshes.map(mesh => `<button data-mesh-id="${escapeHtml(mesh.userData.m3dId)}" class="${mesh === selectedObject ? 'active' : ''}"><span>${mesh.visible ? '◈' : '◇'}</span>${escapeHtml(mesh.userData.m3dName)}</button>`).join('') : '<p class="muted">Sin coincidencias</p>';
+  const unique = new Map();
+  modelMeshes().forEach(mesh => { if (!unique.has(mesh.userData.m3dId)) unique.set(mesh.userData.m3dId, mesh); });
+  const meshes = [...unique.values()].filter(mesh => {
+    const searchable = [mesh.userData.m3dName, ...(mesh.userData.m3dMeta?.path || []), mesh.userData.m3dMeta?.material].join(' ').toLowerCase();
+    return !term || searchable.includes(term);
+  });
+  tree.innerHTML = meshes.length ? meshes.map(mesh => {
+    const path = mesh.userData.m3dMeta?.path;
+    const label = path?.length > 1 ? path.slice(-2).join(' › ') : mesh.userData.m3dName;
+    return `<button data-mesh-id="${escapeHtml(mesh.userData.m3dId)}" class="${mesh.userData.m3dId === selectedObject?.userData.m3dId ? 'active' : ''}"><span>${mesh.visible ? '◈' : '◇'}</span>${escapeHtml(label)}</button>`;
+  }).join('') : '<p class="muted">Sin coincidencias</p>';
 }
 
 function selectObject(object) {
@@ -180,6 +296,7 @@ function selectObject(object) {
     updatePieceProperties(null);
   }
   buildComponentTree($('#model-search')?.value || '');
+  requestRender();
 }
 
 function pointerHit(event) {
@@ -272,6 +389,7 @@ function clearMeasurement() {
   measurementObjects.forEach(object => scene.remove(object));
   measurementObjects = [];
   measurePoints = [];
+  requestRender();
 }
 
 function handleMeasurementClick(event) {
@@ -299,6 +417,7 @@ function handleMeasurementClick(event) {
     const value = unit === 'mm' ? meters * 1000 : unit === 'cm' ? meters * 100 : meters;
     $('#viewer-message').textContent = `Distancia: ${value.toFixed(unit === 'm' ? 3 : 1)} ${unit}`;
   } else $('#viewer-message').textContent = 'Selecciona el segundo punto de medición.';
+  requestRender();
 }
 
 function moveCameraTo(direction, duration = 360) {
@@ -450,6 +569,7 @@ async function openFile(file) {
   $('#viewer-message').textContent = 'Cargando geometría y materiales…';
   const gltf = await new GLTFLoader().loadAsync(objectUrl);
   model = gltf.scene;
+  technicalMetadata = null;
   currentFiles = [file];
   sourceUnit = 'm';
   model.traverse(item => {
@@ -483,6 +603,8 @@ async function openSketchUpExport(fileList) {
   });
   $('#viewer-title').textContent = dae.name.replace(/\.dae$/i, '');
   $('#viewer-message').textContent = 'Cargando exportación de SketchUp…';
+  const metadataFile = files.find(file => file.name.toLowerCase().endsWith('.metadata.json'));
+  technicalMetadata = await readMetadataFile(metadataFile);
   const text = await dae.text();
   const collada = new ColladaLoader(manager).parse(text, '');
   model = collada.scene;
@@ -524,6 +646,15 @@ async function loadSharedModel() {
   }
   if (manifest.permission !== 'download') $('#capture-view').hidden = true;
   const accessQuery = `token=${encodeURIComponent(token)}`;
+  const sharedMetadataPath = manifest.files.find(file => file.toLowerCase().endsWith('.metadata.json'));
+  technicalMetadata = null;
+  if (sharedMetadataPath) {
+    const metadataResponse = await fetch(`/api/shared/${manifest.id}/file/${sharedMetadataPath.split('/').map(encodeURIComponent).join('/')}?${accessQuery}`);
+    if (metadataResponse.ok) {
+      const candidate = await metadataResponse.json().catch(() => null);
+      if (candidate?.schema === 'modular-3d-view-metadata') technicalMetadata = candidate;
+    }
+  }
   const manager = new THREE.LoadingManager();
   manager.setURLModifier(url => {
     const clean = decodeURIComponent(url).replace(/^\.\//, '');
@@ -595,7 +726,7 @@ async function loadPublishedProjects() {
     }
     list.innerHTML = data.models.map(item => {
       const expiration = item.expiresAt ? new Date(item.expiresAt).toLocaleDateString('es-EC') : 'Sin vencimiento';
-      return `<article class="published-card" data-model-id="${item.id}"><div><strong class="project-name">${item.name.replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))}</strong><small>${formatBytes(item.sizeBytes)} · publicado ${new Date(item.createdAt).toLocaleDateString('es-EC')} · vence ${expiration} · ${item.active ? 'Activo' : 'Desactivado'}</small></div><div class="project-actions"><button data-action="copy" data-url="${item.url}">Copiar enlace</button><button data-action="rename">Renombrar</button><button data-action="token">Renovar enlace</button><button data-action="toggle" data-active="${item.active}">${item.active ? 'Desactivar' : 'Activar'}</button><button class="danger" data-action="delete">Eliminar</button></div></article>`;
+      return `<article class="published-card" data-model-id="${item.id}"><div><strong class="project-name">${item.name.replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))} <em>V${item.version || 1}</em></strong><small>${formatBytes(item.sizeBytes)} · publicado ${new Date(item.createdAt).toLocaleDateString('es-EC')} · vence ${expiration} · ${item.active ? 'Activo' : 'Desactivado'}</small></div><div class="project-actions"><button data-action="copy" data-url="${item.url}">Copiar enlace</button><button data-action="rename">Renombrar</button><button data-action="token">Renovar enlace</button><button data-action="toggle" data-active="${item.active}">${item.active ? 'Desactivar' : 'Activar'}</button><button class="danger" data-action="delete">Eliminar</button></div></article>`;
     }).join('');
   } catch (error) {
     list.innerHTML = `<p class="message error">${error.message}</p>`;
@@ -615,14 +746,18 @@ async function loadAdminSummary() {
 
 async function publishForMobile() {
   if (!currentFiles.length) throw new Error('Abre primero una exportación de SketchUp.');
+  const assessment = assessModelForPublishing();
+  if (assessment.blocked) throw new Error(assessment.message);
+  if (assessment.warnings.length && !confirm(`Revisión previa:\n\n${assessment.warnings.map(item => `• ${item}`).join('\n')}\n\n¿Deseas publicar de todas maneras?`)) return;
   const button = $('#publish-mobile');
   button.disabled = true;
   const original = button.textContent;
   let created;
   try {
     const publishFile = currentFiles.length === 1 && /\.glb$/i.test(currentFiles[0].name) ? currentFiles[0] : await optimizedGlbFile();
-    const filesToUpload = [publishFile];
-    const totalSize = publishFile.size;
+    const metadataFile = currentFiles.find(file => file.name.toLowerCase().endsWith('.metadata.json'));
+    const filesToUpload = [publishFile, ...(metadataFile ? [metadataFile] : [])];
+    const totalSize = filesToUpload.reduce((total, file) => total + file.size, 0);
     created = await request('/api/models/init', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -749,15 +884,28 @@ $('#hide-selected').addEventListener('click', () => {
   selectedObject.visible = false;
   selectObject(null);
   buildComponentTree($('#model-search').value);
+  requestRender();
 });
 $('#isolate-selected').addEventListener('click', () => {
   if (!selectedObject) return;
   modelMeshes().forEach(mesh => { mesh.visible = mesh === selectedObject; });
   buildComponentTree($('#model-search').value);
+  requestRender();
+});
+$('#isolate-same').addEventListener('click', () => {
+  if (!selectedObject) return;
+  const metadata = selectedObject.userData.m3dMeta;
+  const match = mesh => metadata
+    ? mesh.userData.m3dMeta?.definition === metadata.definition
+    : mesh.userData.m3dName === selectedObject.userData.m3dName;
+  modelMeshes().forEach(mesh => { mesh.visible = match(mesh); });
+  buildComponentTree($('#model-search').value);
+  requestRender();
 });
 $('#show-all').addEventListener('click', () => {
   modelMeshes().forEach(mesh => { mesh.visible = true; });
   buildComponentTree($('#model-search').value);
+  requestRender();
 });
 $('#opacity-range').addEventListener('input', event => {
   const opacity = Number(event.target.value) / 100;
@@ -768,18 +916,20 @@ $('#opacity-range').addEventListener('input', event => {
     material.opacity = opacity;
     material.needsUpdate = true;
   });
+  requestRender();
 });
 $('#explode-range').addEventListener('input', event => {
   const amount = Number(event.target.value) / 100;
   $('#explode-output').value = `${event.target.value}%`;
   const center = originalModelCenter;
-  const scale = Math.max(originalModelSize.x, originalModelSize.y, originalModelSize.z, 1) * .35 * amount;
+  const scale = Math.max(originalModelSize.x, originalModelSize.y, originalModelSize.z, 1) * .42 * amount;
   originalMeshState.forEach((state, mesh) => {
     const direction = state.worldCenter.clone().sub(center).normalize();
     mesh.position.copy(state.position).add(direction.multiplyScalar(scale));
   });
   selectionHelper?.update();
   updateModuleDimensions();
+  requestRender();
 });
 $('#section-axis').addEventListener('change', event => {
   const axis = event.target.value;
@@ -787,9 +937,11 @@ $('#section-axis').addEventListener('change', event => {
   sectionPlane = axis === 'none' ? null : new THREE.Plane(new THREE.Vector3(axis === 'x' ? -1 : 0, axis === 'y' ? -1 : 0, axis === 'z' ? -1 : 0), 0);
   renderer.localClippingEnabled = Boolean(sectionPlane);
   modelMeshes().forEach(mesh => (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach(material => { material.clippingPlanes = sectionPlane ? [sectionPlane] : []; material.needsUpdate = true; }));
+  requestRender();
 });
 $('#section-range').addEventListener('input', event => {
   if (sectionPlane) sectionPlane.constant = modelMaximumSize() * Number(event.target.value) / 200;
+  requestRender();
 });
 $('#save-note').addEventListener('click', () => {
   if (!selectedObject) return alert('Selecciona primero un componente.');
@@ -816,16 +968,19 @@ $('#measure-unit').addEventListener('change', () => {
 $('#grid-toggle').addEventListener('click', event => {
   gridHelper.visible = !gridHelper.visible;
   event.currentTarget.classList.toggle('active', gridHelper.visible);
+  requestRender();
 });
 $('#shadow-toggle').addEventListener('click', event => {
   renderer.shadowMap.enabled = !renderer.shadowMap.enabled;
   if (model) model.traverse(item => { if (item.isMesh) { item.castShadow = renderer.shadowMap.enabled; item.receiveShadow = renderer.shadowMap.enabled; } });
   event.currentTarget.classList.toggle('active', renderer.shadowMap.enabled);
+  requestRender();
 });
 $('#background-toggle').addEventListener('click', event => {
   darkBackground = !darkBackground;
   scene.background = new THREE.Color(darkBackground ? 0x111417 : 0xe8edf1);
   event.currentTarget.classList.toggle('active', !darkBackground);
+  requestRender();
 });
 $('#fullscreen-toggle').addEventListener('click', async () => {
   if (!document.fullscreenElement) await $('#viewer-stage').requestFullscreen(); else await document.exitFullscreen();
