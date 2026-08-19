@@ -24,6 +24,8 @@ const originalMeshState = new Map();
 const objectNotes = new Map();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
+let originalModelCenter = new THREE.Vector3();
+let originalModelSize = new THREE.Vector3();
 
 function show(name) {
   screens.forEach(item => {
@@ -92,16 +94,61 @@ function modelMeshes() {
 
 function rememberModelState() {
   originalMeshState.clear();
+  const modelBox = new THREE.Box3().setFromObject(model);
+  originalModelCenter = modelBox.getCenter(new THREE.Vector3());
+  originalModelSize = modelBox.getSize(new THREE.Vector3());
   modelMeshes().forEach((mesh, index) => {
     mesh.userData.m3dId = mesh.userData.m3dId || `mesh-${index}`;
     mesh.userData.m3dName = mesh.name || mesh.parent?.name || `Componente ${index + 1}`;
     originalMeshState.set(mesh, {
       position: mesh.position.clone(),
+      worldCenter: new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3()),
       visible: mesh.visible,
       materials: (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).map(material => ({ material, opacity: material.opacity, transparent: material.transparent, clippingPlanes: material.clippingPlanes }))
     });
   });
   buildComponentTree();
+}
+
+function displayLength(modelUnits) {
+  const meters = Number(modelUnits || 0) * (sourceUnit === 'mm' ? .001 : sourceUnit === 'cm' ? .01 : 1);
+  const unit = $('#measure-unit')?.value || 'mm';
+  const value = unit === 'mm' ? meters * 1000 : unit === 'cm' ? meters * 100 : meters;
+  return `${value.toFixed(unit === 'm' ? 3 : unit === 'cm' ? 1 : 0)} ${unit}`;
+}
+
+function materialDescription(mesh) {
+  const materials = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).filter(Boolean);
+  const names = [...new Set(materials.map(material => {
+    const name = String(material.name || '').trim();
+    if (name) return name;
+    if (material.map?.name) return material.map.name;
+    if (material.color) return `Color #${material.color.getHexString().toUpperCase()}`;
+    return 'Sin nombre';
+  }))];
+  return names.join(' / ') || 'No identificado';
+}
+
+function updatePieceProperties(mesh) {
+  const panel = $('#piece-properties');
+  if (!mesh) {
+    panel.hidden = true;
+    return;
+  }
+  const dimensions = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3()).toArray().sort((a, b) => b - a);
+  $('#piece-length').textContent = displayLength(dimensions[0]);
+  $('#piece-width').textContent = displayLength(dimensions[1]);
+  $('#piece-thickness').textContent = displayLength(dimensions[2]);
+  $('#piece-material').textContent = materialDescription(mesh);
+  panel.hidden = false;
+}
+
+function updateModuleDimensions() {
+  if (!model) return;
+  const size = originalModelSize.lengthSq() ? originalModelSize : new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  $('#module-width').textContent = displayLength(size.x);
+  $('#module-height').textContent = displayLength(size.y);
+  $('#module-depth').textContent = displayLength(size.z);
 }
 
 function buildComponentTree(filter = '') {
@@ -125,10 +172,12 @@ function selectObject(object) {
     const material = Array.isArray(selectedObject.material) ? selectedObject.material[0] : selectedObject.material;
     $('#opacity-range').value = Math.round((material?.opacity ?? 1) * 100);
     $('#opacity-output').value = `${$('#opacity-range').value}%`;
+    updatePieceProperties(selectedObject);
   } else {
     selectionHelper = null;
     $('#selection-summary').textContent = 'Ningún objeto seleccionado';
     $('#object-note').value = '';
+    updatePieceProperties(null);
   }
   buildComponentTree($('#model-search')?.value || '');
 }
@@ -723,14 +772,14 @@ $('#opacity-range').addEventListener('input', event => {
 $('#explode-range').addEventListener('input', event => {
   const amount = Number(event.target.value) / 100;
   $('#explode-output').value = `${event.target.value}%`;
-  const center = modelCenter();
-  const scale = modelMaximumSize() * .55 * amount;
+  const center = originalModelCenter;
+  const scale = Math.max(originalModelSize.x, originalModelSize.y, originalModelSize.z, 1) * .35 * amount;
   originalMeshState.forEach((state, mesh) => {
-    const worldCenter = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
-    const direction = worldCenter.sub(center).normalize();
+    const direction = state.worldCenter.clone().sub(center).normalize();
     mesh.position.copy(state.position).add(direction.multiplyScalar(scale));
   });
   selectionHelper?.update();
+  updateModuleDimensions();
 });
 $('#section-axis').addEventListener('change', event => {
   const axis = event.target.value;
@@ -754,6 +803,16 @@ $('#select-toggle').addEventListener('click', event => {
 $('#open-model-panel').addEventListener('click', () => $('#model-panel').classList.add('open'));
 $('#panel-toggle').addEventListener('click', () => $('#model-panel').classList.remove('open'));
 $('#projection-toggle').addEventListener('click', () => switchProjection(camera?.isOrthographicCamera ? 'perspective' : 'orthographic'));
+$('#module-dimensions-toggle').addEventListener('click', event => {
+  const panel = $('#module-dimensions');
+  panel.hidden = !panel.hidden;
+  event.currentTarget.classList.toggle('active', !panel.hidden);
+  updateModuleDimensions();
+});
+$('#measure-unit').addEventListener('change', () => {
+  updatePieceProperties(selectedObject);
+  updateModuleDimensions();
+});
 $('#grid-toggle').addEventListener('click', event => {
   gridHelper.visible = !gridHelper.visible;
   event.currentTarget.classList.toggle('active', gridHelper.visible);
