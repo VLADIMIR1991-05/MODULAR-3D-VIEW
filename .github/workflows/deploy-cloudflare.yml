@@ -72,5 +72,12 @@ jobs:
       - name: Aplicar estructura D1
         run: npx wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote --config wrangler.ci.json
 
+      - name: Configurar firma interna de sesiones
+        shell: bash
+        run: |
+          set -euo pipefail
+          session_secret="$(printf '%s' "$CLOUDFLARE_API_TOKEN:modular3d-session-v1" | sha256sum | cut -d' ' -f1)"
+          printf '%s' "$session_secret" | npx wrangler secret put MODULAR3D_TOKEN_SECRET --config wrangler.ci.json
+
       - name: Publicar Worker
         run: npx wrangler deploy --config wrangler.ci.json
