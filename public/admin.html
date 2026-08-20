@@ -50,11 +50,32 @@
       <div class="form-grid">
         <label>Nombre<input name="name" required></label>
         <label>Correo<input name="email" type="email" required></label>
-        <label class="wide">Contraseña compartida<input name="password" type="password" minlength="10"><small id="password-help">Obligatoria para usuarios nuevos. Se utilizará en todos sus productos.</small></label>
+        <div class="wide password-control">
+          <label class="password-choice"><input id="change-password" name="change_password" type="checkbox"> <span>Cambiar contraseña compartida</span></label>
+          <label id="password-field">Nueva contraseña<input name="password" type="password" minlength="10" autocomplete="new-password" disabled><small id="password-help">Activa la opción para establecer una contraseña nueva en todos los productos.</small></label>
+        </div>
       </div>
       <h3 class="products-title">Productos y vigencia individual</h3>
       <div id="user-products" class="product-editor"></div>
       <div class="actions"><button type="button" class="secondary" data-close>Cancelar</button><button type="submit">Guardar usuario</button></div>
+    </form>
+  </dialog>
+  <dialog id="product-dialog">
+    <form id="product-form" method="dialog">
+      <div class="dialog-head"><h2 id="product-dialog-title">Nuevo producto</h2><button type="button" data-product-close aria-label="Cerrar">×</button></div>
+      <input name="id" type="hidden">
+      <div class="form-grid">
+        <label>Código interno<input name="code" required pattern="[a-z0-9_\-]+" placeholder="mi_producto"></label>
+        <label>Tipo<select name="product_type"><option value="web">Aplicación web</option><option value="plugin">Plugin</option></select></label>
+        <label class="wide">Nombre comercial<input name="name" required placeholder="Nombre del producto"></label>
+        <label class="wide">Descripción<input name="description" placeholder="Descripción breve"></label>
+        <label class="wide">Enlace directo<input name="launch_url" type="url" placeholder="https://..."><small>Para abrir aplicaciones web.</small></label>
+        <label class="wide">Enlace de descarga<input name="download_url" type="url" placeholder="https://..."><small>Opcional. Los plugins MODULAR-3D pueden usar automáticamente la última versión RBZ.</small></label>
+        <label class="wide">Repositorio<input name="repository_url" type="url" placeholder="https://github.com/..."></label>
+        <label>Orden<input name="sort_order" type="number" min="0" max="9999" value="100"></label>
+        <label>Estado<select name="active"><option value="1">Activo</option><option value="0">Oculto</option></select></label>
+      </div>
+      <div class="actions"><button type="button" class="secondary" data-product-close>Cancelar</button><button type="submit">Guardar producto</button></div>
     </form>
   </dialog>
   <script type="module" src="/admin.js"></script>

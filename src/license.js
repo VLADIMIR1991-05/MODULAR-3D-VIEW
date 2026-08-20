@@ -356,11 +356,59 @@ async function masterApi(path, request, env) {
     return response({ users, licenses, devices, projects, products, audits24h: Number(audits?.total || 0) });
   }
   if (path === '/api/master/products' && request.method === 'GET') {
+    const includeAll = new URL(request.url).searchParams.get('all') === '1';
     const { results } = await env.DB.prepare(`SELECT p.*,COUNT(pl.id) licenses,
       SUM(CASE WHEN pl.status='active' AND pl.expires_at>CURRENT_TIMESTAMP THEN 1 ELSE 0 END) active_licenses
       FROM platform_products p LEFT JOIN product_licenses pl ON pl.product_id=p.id
-      WHERE p.active=1 GROUP BY p.id ORDER BY p.id`).all();
-    return response(results);
+      WHERE (?1=1 OR p.active=1) GROUP BY p.id ORDER BY p.sort_order,p.name`).bind(includeAll ? 1 : 0).all();
+    const latestRelease = await env.DB.prepare(`SELECT filename FROM license_releases WHERE active=1 ORDER BY created_at DESC,id DESC LIMIT 1`).first().catch(() => null);
+    const origin = new URL(request.url).origin;
+    return response(results.map(product => ({
+      ...product,
+      download_url: product.download_url || (product.code === 'modular3d_plugin' && latestRelease?.filename
+        ? `${origin}/releases/${encodeURIComponent(latestRelease.filename)}` : null)
+    })));
+  }
+  if (path === '/api/master/products/save' && request.method === 'POST') {
+    const body = await jsonBody(request).catch(() => ({}));
+    const id = Number(body.id || 0);
+    const code = String(body.code || '').trim().toLowerCase();
+    const name = String(body.name || '').trim().slice(0, 120);
+    const productType = body.product_type === 'plugin' ? 'plugin' : 'web';
+    const cleanUrl = value => {
+      const text = String(value || '').trim();
+      if (!text) return null;
+      const parsed = new URL(text);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('URL_INVALID');
+      return parsed.toString();
+    };
+    if (!/^[a-z0-9_-]{2,60}$/.test(code) || !name) return response({ ok: false, message: 'Completa un código interno válido y el nombre del producto.' }, 400);
+    let launchUrl, downloadUrl, repositoryUrl;
+    try {
+      launchUrl = cleanUrl(body.launch_url);
+      downloadUrl = cleanUrl(body.download_url);
+      repositoryUrl = cleanUrl(body.repository_url);
+    } catch {
+      return response({ ok: false, message: 'Los enlaces deben comenzar con https:// o http://.' }, 400);
+    }
+    const duplicate = await env.DB.prepare('SELECT id FROM platform_products WHERE code=?1 COLLATE NOCASE AND id<>?2').bind(code, id).first();
+    if (duplicate) return response({ ok: false, message: 'Ya existe un producto con ese código.' }, 409);
+    const values = [code, name, String(body.description || '').trim().slice(0, 500), productType, launchUrl, downloadUrl,
+      repositoryUrl, Math.min(Math.max(Number(body.sort_order || 100), 0), 9999), Number(body.active) === 0 ? 0 : 1, nowIso()];
+    let productId = id;
+    if (id) {
+      const result = await env.DB.prepare(`UPDATE platform_products SET code=?1,name=?2,description=?3,product_type=?4,
+        launch_url=?5,download_url=?6,repository_url=?7,sort_order=?8,active=?9,updated_at=?10 WHERE id=?11`)
+        .bind(...values, id).run();
+      if (!result.meta?.changes) return response({ ok: false, message: 'Producto no encontrado.' }, 404);
+    } else {
+      const created = await env.DB.prepare(`INSERT INTO platform_products(code,name,description,product_type,launch_url,download_url,
+        repository_url,sort_order,active,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10) RETURNING id`)
+        .bind(...values).first();
+      productId = created.id;
+    }
+    await audit(env, 'master_product_saved', { code, productType, admin: admin.email }, null);
+    return response({ ok: true, id: productId }, id ? 200 : 201);
   }
   if (path === '/api/master/users' && request.method === 'GET') {
     const { results } = await env.DB.prepare(`SELECT u.id,u.email,u.name,u.status user_status,u.created_at,u.updated_at,
@@ -424,6 +472,27 @@ async function masterApi(path, request, env) {
     if (statements.length) await env.DB.batch(statements);
     await audit(env, 'master_user_saved', { products: enabled.map(item => item.code), passwordChanged: Boolean(password), admin: admin.email }, user.id);
     return response({ ok: true, id: user.id }, user.created_at ? 200 : 201);
+  }
+  if (path === '/api/master/users/change-password' && request.method === 'POST') {
+    const body = await jsonBody(request).catch(() => ({}));
+    const user = await env.DB.prepare('SELECT id,email FROM license_users WHERE id=?1').bind(Number(body.id || 0)).first();
+    const password = String(body.password || '');
+    if (!user) return response({ ok: false, message: 'Usuario no encontrado.' }, 404);
+    if (password.length < 10) return response({ ok: false, message: 'La contraseña nueva debe tener mínimo 10 caracteres.' }, 400);
+    try {
+      const passwordHash = await hashPassword(password);
+      const timestamp = nowIso();
+      await env.DB.batch([
+        env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(passwordHash, timestamp, user.id),
+        env.DB.prepare('UPDATE product_licenses SET credential_hash=?1,updated_at=?2 WHERE user_id=?3').bind(passwordHash, timestamp, user.id),
+        env.DB.prepare('UPDATE license_devices SET active=0 WHERE user_id=?1').bind(user.id)
+      ]);
+      await audit(env, 'master_password_changed', { admin: admin.email }, user.id);
+      return response({ ok: true, devices_released: true });
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'master_password_change_failed', userId: user.id, error: String(error?.message || error) }));
+      return response({ ok: false, message: 'No se pudo actualizar la contraseña. Las demás configuraciones no fueron modificadas.' }, 500);
+    }
   }
   if (/^\/api\/master\/users\/(release-devices|reset-password|delete)$/.test(path) && request.method === 'POST') {
     const body = await jsonBody(request).catch(() => ({}));

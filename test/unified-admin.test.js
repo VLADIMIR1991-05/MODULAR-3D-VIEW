@@ -26,4 +26,24 @@ test('master UI edits users with multiple products', async () => {
   assert.match(script, /productEditor/);
   assert.match(script, /Liberar equipos/);
   assert.match(script, /Nueva clave/);
+  assert.match(html, /change-password/);
+  assert.match(html, /autocomplete="new-password" disabled/);
+  assert.match(script, /master\/users\/change-password/);
+});
+
+test('product catalog distinguishes web applications and downloadable plugins', async () => {
+  const [source, html, script, migration] = await Promise.all([
+    readFile(new URL('../src/license.js', import.meta.url), 'utf8'),
+    readFile(new URL('../public/admin.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/admin.js', import.meta.url), 'utf8'),
+    readFile(new URL('../migrations/0005_product_catalog.sql', import.meta.url), 'utf8')
+  ]);
+  assert.match(source, /master\/products\/save/);
+  assert.match(source, /latestRelease/);
+  assert.match(html, /product-dialog/);
+  assert.match(script, /Descargar plugin completo/);
+  assert.match(script, /Abrir aplicación/);
+  assert.match(migration, /product_type/);
+  assert.match(migration, /launch_url/);
+  assert.match(migration, /download_url/);
 });
