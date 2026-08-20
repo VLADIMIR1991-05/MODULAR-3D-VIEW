@@ -319,6 +319,7 @@ async function masterLogin(request, env) {
   const expiresAt = Date.now() + 8 * 3600000;
   await env.SESSIONS.put(`master:${sessionId}`, JSON.stringify({ adminId: admin.id, expiresAt }), { expirationTtl: 28800 });
   await clearRateLimit(env, `master:${email}`);
+  await clearRateLimit(env, `master-ip:${clientIp}`);
   await audit(env, 'master_login', { role: admin.role }, user.id);
   return response({ ok: true, admin }, 200, { 'set-cookie': masterCookie(sessionId, 28800, request) });
 }
