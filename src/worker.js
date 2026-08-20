@@ -1,4 +1,5 @@
 import { buildTrimbleAuthorizeUrl, json, oauthStateCookie, parseCookies, safeEqual, sessionCookie, trimbleApiBase, TRIMBLE_ID_BASE } from './core.js';
+import { licenseApi, validateLicenseKey } from './license.js';
 
 const sessions = new Map();
 const oauthStates = new Map();
@@ -58,6 +59,7 @@ async function refreshTrimbleSession(request, session, env) {
 
 async function validateLicense(body, env) {
   if (!body.email || !body.licenseKey) return { valid: false, message: 'Correo y licencia son obligatorios.' };
+  if (env.DB) return validateLicenseKey(body.email, body.licenseKey, env);
   if (env.LICENSE_SERVER_URL) {
     const response = await fetch(env.LICENSE_SERVER_URL, {
       method: 'POST',
@@ -159,6 +161,8 @@ function isAdmin(session, env) {
 
 async function api(request, env) {
   const url = new URL(request.url);
+  const licenseResponse = await licenseApi(request, env);
+  if (licenseResponse) return licenseResponse;
   if (url.pathname === '/api/health') return json({ ok: true, service: 'MODULAR-3D VIEW' });
   if (url.pathname === '/api/config') return json({ trimbleConfigured: configured(env), demoEnabled: env.ALLOW_DEMO_LICENSE === 'true' });
   if (url.pathname === '/api/license/validate' && request.method === 'POST') {
