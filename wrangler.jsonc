@@ -27,5 +27,13 @@
       "bucket_name": "modular-3d-models"
     }
   ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "modular-3d-platform",
+      "database_id": "02e16fc0-a2d9-438a-8984-221e714afc6c",
+      "migrations_dir": "migrations"
+    }
+  ],
   "observability": { "enabled": true }
 }
