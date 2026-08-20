@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>MODULAR-3D · Panel maestro</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <section id="login" class="login-shell">
+    <form id="login-form" class="login-card">
+      <div class="brand"><span>◇</span> MODULAR-3D</div>
+      <p class="eyebrow">CUENTA MAESTRA</p>
+      <h1>Control de productos</h1>
+      <p class="muted">Administra todas las licencias y proyectos desde un solo lugar.</p>
+      <label>Correo administrativo<input name="email" type="email" value="desarrollo@modular-3d.com" required autocomplete="username"></label>
+      <label>Contraseña<input name="password" type="password" minlength="10" required autocomplete="current-password"></label>
+      <button type="submit">Ingresar al panel</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+
+  <div id="app" class="app hidden">
+    <aside>
+      <div class="brand"><span>◇</span> MODULAR-3D</div>
+      <p class="eyebrow">PLATAFORMA CENTRAL</p>
+      <nav>
+        <button data-view="overview" class="active">Resumen</button>
+        <button data-view="products">Productos</button>
+        <button data-view="licenses">Licencias</button>
+        <button data-view="projects">Proyectos</button>
+        <button data-view="devices">Dispositivos</button>
+        <button data-view="releases">Versiones RBZ</button>
+        <button data-view="audit">Auditoría</button>
+      </nav>
+      <div class="aside-foot"><span id="admin-email"></span><button id="logout" class="ghost">Cerrar sesión</button></div>
+    </aside>
+    <main>
+      <header><div><p class="eyebrow">PANEL MAESTRO</p><h1 id="title">Resumen</h1></div><button id="refresh" class="secondary">Actualizar</button></header>
+      <div id="notice" class="notice hidden"></div>
+      <section id="content" aria-live="polite"></section>
+    </main>
+  </div>
+  <dialog id="license-dialog">
+    <form id="license-form" method="dialog">
+      <div class="dialog-head"><h2>Nueva licencia</h2><button type="button" data-close aria-label="Cerrar">×</button></div>
+      <div class="form-grid">
+        <label>Nombre<input name="name" required></label>
+        <label>Correo<input name="email" type="email" required></label>
+        <label>Producto<select name="product_code" id="license-product" required></select></label>
+        <label>Plan<input name="plan" value="standard" required></label>
+        <label>Duración (días)<input name="days" type="number" value="365" min="1" max="3650" required></label>
+        <label>Dispositivos<input name="max_devices" type="number" value="1" min="1" max="100" required></label>
+        <label class="wide">Clave inicial<input name="password" type="text" minlength="10" required><small>Entrégala al cliente por un canal seguro.</small></label>
+      </div>
+      <div class="actions"><button type="button" class="secondary" data-close>Cancelar</button><button type="submit">Crear licencia</button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/admin.js"></script>
+</body>
+</html>

@@ -372,6 +372,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/') || url.pathname === '/latest.json' || url.pathname.startsWith('/releases/')) return api(request, env);
+    if (url.pathname === '/admin' || url.pathname === '/admin/') return env.ASSETS.fetch(new Request(new URL('/admin.html', url), request));
     return env.ASSETS.fetch(request);
   }
 };

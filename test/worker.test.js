@@ -14,6 +14,25 @@ test('health endpoint responds', async () => {
   assert.deepEqual(await response.json(), { ok: true, service: 'MODULAR-3D VIEW' });
 });
 
+test('serves the master panel at /admin', async () => {
+  const response = await worker.fetch(new Request('https://example.com/admin'), {
+    ...env,
+    ASSETS: { fetch: request => new Response(new URL(request.url).pathname) }
+  });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '/admin.html');
+});
+
+test('protects master data without a master session', async () => {
+  const response = await worker.fetch(new Request('https://example.com/api/master/dashboard'), {
+    ...env,
+    DB: {},
+    MODULAR3D_TOKEN_SECRET: 'test-secret'
+  });
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).code, 'MASTER_UNAUTHORIZED');
+});
+
 test('validates demo license and creates session', async () => {
   const response = await worker.fetch(new Request('https://example.com/api/license/validate', {
     method: 'POST',

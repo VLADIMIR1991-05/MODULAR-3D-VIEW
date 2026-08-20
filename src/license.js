@@ -82,6 +82,29 @@ async function audit(env, action, detail = {}, userId = null, machineId = null) 
 function adminAllowed(request, env) {
   return Boolean(env.MODULAR3D_ADMIN_KEY && constantTimeEqual(request.headers.get('x-admin-key') || '', env.MODULAR3D_ADMIN_KEY));
 }
+function cookieValue(request, name) {
+  const cookies = String(request.headers.get('cookie') || '').split(';');
+  for (const cookie of cookies) {
+    const [key, ...parts] = cookie.trim().split('=');
+    if (key === name) return decodeURIComponent(parts.join('='));
+  }
+  return '';
+}
+function masterCookie(value, maxAge, request) {
+  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  return `m3d_master=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
+}
+async function masterSession(request, env) {
+  const sessionId = cookieValue(request, 'm3d_master');
+  if (!sessionId || !env.SESSIONS) return null;
+  const session = await env.SESSIONS.get(`master:${sessionId}`, 'json');
+  if (!session || Number(session.expiresAt) <= Date.now()) return null;
+  const admin = await env.DB.prepare('SELECT id,email,name,role,active FROM platform_admins WHERE id=?1 AND active=1').bind(session.adminId).first();
+  return admin || null;
+}
+async function masterAllowed(request, env) {
+  return adminAllowed(request, env) || Boolean(await masterSession(request, env));
+}
 async function jsonBody(request) {
   if (Number(request.headers.get('content-length') || 0) > 64000) throw new Error('REQUEST_TOO_LARGE');
   return request.json();
@@ -187,7 +210,7 @@ export async function validateLicenseKey(email, licenseKey, env) {
   return { valid: Boolean(valid && passwordValid), active: Boolean(valid && passwordValid), message: valid && passwordValid ? 'Licencia activa.' : message || 'Licencia inválida.' };
 }
 async function adminUsers(request, env) {
-  if (!adminAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
+  if (!await masterAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
   if (request.method === 'GET') {
     const { results } = await env.DB.prepare(`SELECT u.id,u.email,u.name,u.status,u.expires_at,u.max_devices,u.created_at,
       SUM(CASE WHEN d.active=1 THEN 1 ELSE 0 END) active_devices,MAX(d.last_seen_at) last_seen_at
@@ -207,7 +230,7 @@ async function adminUsers(request, env) {
   } catch { return response({ ok: false, message: 'Ese correo ya existe.' }, 409); }
 }
 async function adminAction(path, request, env) {
-  if (!adminAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
+  if (!await masterAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
   const body = await jsonBody(request).catch(() => ({}));
   const user = await env.DB.prepare('SELECT * FROM license_users WHERE id=?1').bind(Number(body.id || 0)).first();
   if (!user) return response({ ok: false, code: 'USER_NOT_FOUND' }, 404);
@@ -244,12 +267,12 @@ async function releases(path, request, env, url) {
     return new Response(object.body, { headers: { 'content-type': row.content_type, 'content-disposition': `attachment; filename="${row.filename.replace(/["\\]/g, '_')}"`, etag: object.httpEtag } });
   }
   if (path === '/api/admin/releases' && request.method === 'GET') {
-    if (!adminAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
+    if (!await masterAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
     const { results } = await env.DB.prepare('SELECT id,version,filename,notes,required,file_size,active,created_at FROM license_releases ORDER BY id DESC LIMIT 25').all();
     return response({ sign_url: 'https://extensions.sketchup.com/extension/sign', latest_url: `${url.origin}/latest.json`, releases: results.map(item => ({ ...item, required: Boolean(item.required), active: Boolean(item.active), rbz_url: `${url.origin}/releases/${encodeURIComponent(item.filename)}` })) });
   }
   if (path === '/api/admin/releases/upload' && request.method === 'PUT') {
-    if (!adminAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
+    if (!await masterAllowed(request, env)) return response({ ok: false, code: 'ADMIN_UNAUTHORIZED' }, 401);
     const size = Number(request.headers.get('content-length') || 0);
     if (!request.body || size <= 0 || size > 30 * 1024 * 1024) return response({ ok: false, message: 'El RBZ está vacío o supera 30 MB.' }, 413);
     const version = String(url.searchParams.get('version') || '').trim().slice(0, 64);
@@ -272,10 +295,130 @@ async function releases(path, request, env, url) {
   return null;
 }
 
+async function masterLogin(request, env) {
+  if (!env.SESSIONS) return response({ ok: false, message: 'Almacenamiento de sesiones no configurado.' }, 503);
+  const body = await jsonBody(request).catch(() => ({}));
+  const email = String(body.email || '').trim().toLowerCase();
+  const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
+  if (await rateLimited(env, `master-ip:${clientIp}`, 10) || await rateLimited(env, `master:${email}`, 5)) {
+    return response({ ok: false, message: 'Demasiados intentos. Espera 15 minutos.' }, 429, { 'retry-after': '900' });
+  }
+  const user = await findUserByEmail(env, email);
+  if (!user || !await verifyPassword(String(body.password || ''), user.password_hash)) {
+    await audit(env, 'master_login_failed', { email }, user?.id);
+    return response({ ok: false, message: 'Correo o contraseña incorrectos.' }, 401);
+  }
+  let admin = await env.DB.prepare('SELECT id,email,name,role,active FROM platform_admins WHERE email=?1 COLLATE NOCASE').bind(email).first();
+  if (!admin && env.MASTER_EMAIL && email === String(env.MASTER_EMAIL).toLowerCase()) {
+    await env.DB.prepare(`INSERT OR IGNORE INTO platform_admins(email,name,role,active,created_at,updated_at)
+      VALUES(?1,?2,'owner',1,?3,?3)`).bind(email, user.name || 'Propietario', nowIso()).run();
+    admin = await env.DB.prepare('SELECT id,email,name,role,active FROM platform_admins WHERE email=?1 COLLATE NOCASE').bind(email).first();
+  }
+  if (!admin || Number(admin.active) !== 1) return response({ ok: false, message: 'Esta cuenta no tiene acceso administrativo.' }, 403);
+  const sessionId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
+  const expiresAt = Date.now() + 8 * 3600000;
+  await env.SESSIONS.put(`master:${sessionId}`, JSON.stringify({ adminId: admin.id, expiresAt }), { expirationTtl: 28800 });
+  await clearRateLimit(env, `master:${email}`);
+  await audit(env, 'master_login', { role: admin.role }, user.id);
+  return response({ ok: true, admin }, 200, { 'set-cookie': masterCookie(sessionId, 28800, request) });
+}
+
+async function masterApi(path, request, env) {
+  if (path === '/api/master/login' && request.method === 'POST') return masterLogin(request, env);
+  if (path === '/api/master/logout' && request.method === 'POST') {
+    const sessionId = cookieValue(request, 'm3d_master');
+    if (sessionId && env.SESSIONS) await env.SESSIONS.delete(`master:${sessionId}`);
+    return response({ ok: true }, 200, { 'set-cookie': masterCookie('', 0, request) });
+  }
+  const admin = await masterSession(request, env);
+  if (!admin) return response({ ok: false, code: 'MASTER_UNAUTHORIZED' }, 401);
+  if (path === '/api/master/session' && request.method === 'GET') return response({ ok: true, admin });
+  if (path === '/api/master/dashboard' && request.method === 'GET') {
+    const [users, licenses, devices, projects, products, audits] = await Promise.all([
+      env.DB.prepare('SELECT COUNT(*) total FROM license_users').first(),
+      env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status='active' AND expires_at>CURRENT_TIMESTAMP THEN 1 ELSE 0 END) active FROM product_licenses").first(),
+      env.DB.prepare('SELECT COUNT(*) total,SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) active FROM license_devices').first(),
+      env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) active FROM tenant_projects").first(),
+      env.DB.prepare('SELECT COUNT(*) total,SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) active FROM platform_products').first(),
+      env.DB.prepare("SELECT COUNT(*) total FROM license_audit_logs WHERE created_at>=datetime('now','-24 hours')").first()
+    ]);
+    return response({ users, licenses, devices, projects, products, audits24h: Number(audits?.total || 0) });
+  }
+  if (path === '/api/master/products' && request.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT p.*,COUNT(pl.id) licenses,
+      SUM(CASE WHEN pl.status='active' AND pl.expires_at>CURRENT_TIMESTAMP THEN 1 ELSE 0 END) active_licenses
+      FROM platform_products p LEFT JOIN product_licenses pl ON pl.product_id=p.id GROUP BY p.id ORDER BY p.id`).all();
+    return response(results);
+  }
+  if (path === '/api/master/licenses' && request.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT pl.id,u.email,u.name,p.code product_code,p.name product_name,
+      pl.plan,pl.status,pl.expires_at,pl.max_devices,pl.created_at,
+      (SELECT COUNT(*) FROM license_devices d WHERE d.user_id=u.id AND d.active=1) active_devices
+      FROM product_licenses pl JOIN license_users u ON u.id=pl.user_id
+      JOIN platform_products p ON p.id=pl.product_id ORDER BY pl.id DESC LIMIT 500`).all();
+    return response(results);
+  }
+  if (path === '/api/master/licenses' && request.method === 'POST') {
+    const body = await jsonBody(request).catch(() => ({}));
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '');
+    const productCode = String(body.product_code || '').trim().toLowerCase();
+    if (!email.includes('@') || password.length < 10 || !productCode) return response({ ok: false, message: 'Completa correo, producto y una clave de mínimo 10 caracteres.' }, 400);
+    const product = await env.DB.prepare('SELECT id FROM platform_products WHERE code=?1 COLLATE NOCASE AND active=1').bind(productCode).first();
+    if (!product) return response({ ok: false, message: 'Producto no válido.' }, 400);
+    const timestamp = nowIso();
+    const days = Math.min(Math.max(Number(body.days || 30), 1), 3650);
+    const expiresAt = new Date(Date.now() + days * 86400000).toISOString();
+    let user = await findUserByEmail(env, email);
+    if (!user) {
+      const created = await env.DB.prepare(`INSERT INTO license_users(email,name,password_hash,status,expires_at,max_devices,created_at,updated_at)
+        VALUES(?1,?2,?3,'active',?4,?5,?6,?6) RETURNING id`).bind(email, String(body.name || '').trim(), await hashPassword(password), expiresAt, Math.min(Math.max(Number(body.max_devices || 1), 1), 10), timestamp).first();
+      user = { id: created.id };
+    }
+    try {
+      const created = await env.DB.prepare(`INSERT INTO product_licenses(user_id,product_id,credential_hash,plan,status,expires_at,max_devices,created_at,updated_at)
+        VALUES(?1,?2,?3,?4,'active',?5,?6,?7,?7) RETURNING id`).bind(user.id, product.id, await hashPassword(password), String(body.plan || 'standard').slice(0, 40), expiresAt, Math.min(Math.max(Number(body.max_devices || 1), 1), 100), timestamp).first();
+      await audit(env, 'master_license_created', { licenseId: created.id, productCode, admin: admin.email }, user.id);
+      return response({ ok: true, id: created.id }, 201);
+    } catch { return response({ ok: false, message: 'Ese usuario ya tiene licencia para este producto.' }, 409); }
+  }
+  if (path === '/api/master/licenses/update' && request.method === 'POST') {
+    const body = await jsonBody(request).catch(() => ({}));
+    const id = Number(body.id || 0);
+    const current = await env.DB.prepare('SELECT * FROM product_licenses WHERE id=?1').bind(id).first();
+    if (!current) return response({ ok: false, message: 'Licencia no encontrada.' }, 404);
+    const status = ['active', 'blocked', 'cancelled'].includes(body.status) ? body.status : current.status;
+    const expiresAt = body.days == null ? current.expires_at : new Date(Date.now() + Math.min(Math.max(Number(body.days), 0), 3650) * 86400000).toISOString();
+    await env.DB.prepare('UPDATE product_licenses SET status=?1,expires_at=?2,max_devices=?3,plan=?4,updated_at=?5 WHERE id=?6')
+      .bind(status, expiresAt, Math.min(Math.max(Number(body.max_devices ?? current.max_devices), 1), 100), String(body.plan ?? current.plan).slice(0, 40), nowIso(), id).run();
+    await audit(env, 'master_license_updated', { licenseId: id, status, admin: admin.email });
+    return response({ ok: true });
+  }
+  if (path === '/api/master/projects' && request.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT tp.id,tp.external_id,tp.name,tp.status,tp.storage_prefix,tp.created_at,tp.updated_at,
+      u.email,p.code product_code,p.name product_name FROM tenant_projects tp
+      JOIN product_licenses pl ON pl.id=tp.license_id JOIN license_users u ON u.id=pl.user_id
+      JOIN platform_products p ON p.id=pl.product_id ORDER BY tp.id DESC LIMIT 500`).all();
+    return response(results);
+  }
+  if (path === '/api/master/devices' && request.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT d.id,d.machine_id,d.active,d.plugin_version,d.sketchup_version,d.first_seen_at,d.last_seen_at,u.email,u.name
+      FROM license_devices d JOIN license_users u ON u.id=d.user_id ORDER BY d.last_seen_at DESC LIMIT 500`).all();
+    return response(results);
+  }
+  if (path === '/api/master/audit' && request.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT a.id,a.action,a.machine_id,a.detail,a.created_at,u.email
+      FROM license_audit_logs a LEFT JOIN license_users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 200`).all();
+    return response(results);
+  }
+  return response({ ok: false, code: 'NOT_FOUND' }, 404);
+}
+
 export async function licenseApi(request, env) {
   if (!env.DB || !env.MODULAR3D_TOKEN_SECRET) return null;
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path.startsWith('/api/master/')) return masterApi(path, request, env);
   if (path === '/api/v1/auth/login' && request.method === 'POST') return login(request, env);
   if ((path === '/api/v1/license/validate' || path === '/api/v1/license/heartbeat') && request.method === 'POST') return validateSession(request, env);
   if (path === '/api/v1/license/check-key' && request.method === 'POST') return checkKey(request, env);
