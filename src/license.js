@@ -238,8 +238,10 @@ async function adminAction(path, request, env) {
   else if (path.endsWith('/users/delete')) await env.DB.prepare('DELETE FROM license_users WHERE id=?1').bind(user.id).run();
   else if (path.endsWith('/users/reset-password')) {
     const temporary = `M3D-${base64Url(crypto.getRandomValues(new Uint8Array(9)))}`;
+    const passwordHash = await hashPassword(temporary);
     await env.DB.batch([
-      env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(await hashPassword(temporary), nowIso(), user.id),
+      env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(passwordHash, nowIso(), user.id),
+      env.DB.prepare('UPDATE product_licenses SET credential_hash=?1,updated_at=?2 WHERE user_id=?3').bind(passwordHash, nowIso(), user.id),
       env.DB.prepare('UPDATE license_devices SET active=0 WHERE user_id=?1').bind(user.id)
     ]);
     return response({ ok: true, temporary_password: temporary });
@@ -356,8 +358,97 @@ async function masterApi(path, request, env) {
   if (path === '/api/master/products' && request.method === 'GET') {
     const { results } = await env.DB.prepare(`SELECT p.*,COUNT(pl.id) licenses,
       SUM(CASE WHEN pl.status='active' AND pl.expires_at>CURRENT_TIMESTAMP THEN 1 ELSE 0 END) active_licenses
-      FROM platform_products p LEFT JOIN product_licenses pl ON pl.product_id=p.id GROUP BY p.id ORDER BY p.id`).all();
+      FROM platform_products p LEFT JOIN product_licenses pl ON pl.product_id=p.id
+      WHERE p.active=1 GROUP BY p.id ORDER BY p.id`).all();
     return response(results);
+  }
+  if (path === '/api/master/users' && request.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT u.id,u.email,u.name,u.status user_status,u.created_at,u.updated_at,
+      p.code product_code,p.name product_name,pl.id license_id,pl.plan,pl.status license_status,
+      pl.expires_at,pl.max_devices,
+      (SELECT COUNT(*) FROM license_devices d WHERE d.user_id=u.id AND d.active=1) active_devices,
+      (SELECT MAX(last_seen_at) FROM license_devices d WHERE d.user_id=u.id) last_seen_at
+      FROM license_users u
+      LEFT JOIN product_licenses pl ON pl.user_id=u.id
+      LEFT JOIN platform_products p ON p.id=pl.product_id AND p.active=1
+      ORDER BY u.id DESC,p.id`).all();
+    return response(results);
+  }
+  if (path === '/api/master/users/save' && request.method === 'POST') {
+    const body = await jsonBody(request).catch(() => ({}));
+    const email = String(body.email || '').trim().toLowerCase();
+    const name = String(body.name || '').trim().slice(0, 120);
+    const password = String(body.password || '');
+    const selections = Array.isArray(body.products) ? body.products.slice(0, 20) : [];
+    if (!email.includes('@') || !name || !selections.some(item => item.enabled)) {
+      return response({ ok: false, message: 'Completa nombre, correo y selecciona al menos un producto.' }, 400);
+    }
+    let user = body.id ? await env.DB.prepare('SELECT * FROM license_users WHERE id=?1').bind(Number(body.id)).first() : await findUserByEmail(env, email);
+    if (!user && password.length < 10) return response({ ok: false, message: 'La contraseña inicial debe tener mínimo 10 caracteres.' }, 400);
+    if (user && password && password.length < 10) return response({ ok: false, message: 'La nueva contraseña debe tener mínimo 10 caracteres.' }, 400);
+    const duplicate = await env.DB.prepare('SELECT id FROM license_users WHERE email=?1 COLLATE NOCASE AND id<>?2').bind(email, Number(user?.id || 0)).first();
+    if (duplicate) return response({ ok: false, message: 'Ese correo pertenece a otro usuario.' }, 409);
+    const timestamp = nowIso();
+    const sharedHash = password ? await hashPassword(password) : user?.password_hash;
+    const enabled = selections.filter(item => item.enabled);
+    const expirations = enabled.map(item => new Date(Date.now() + Math.min(Math.max(Number(item.days || 1), 1), 3650) * 86400000).toISOString());
+    const identityExpires = expirations.sort().at(-1);
+    const identityMaxDevices = Math.min(10, Math.max(...enabled.map(item => Math.min(Math.max(Number(item.max_devices || 1), 1), 100))));
+    if (!user) {
+      const created = await env.DB.prepare(`INSERT INTO license_users(email,name,password_hash,status,expires_at,max_devices,created_at,updated_at)
+        VALUES(?1,?2,?3,'active',?4,?5,?6,?6) RETURNING id`).bind(email, name, sharedHash, identityExpires, identityMaxDevices, timestamp).first();
+      user = { id: created.id };
+    } else {
+      await env.DB.prepare(`UPDATE license_users SET email=?1,name=?2,password_hash=?3,status='active',expires_at=?4,
+        max_devices=?5,updated_at=?6 WHERE id=?7`).bind(email, name, sharedHash, identityExpires, identityMaxDevices, timestamp, user.id).run();
+      if (password) await env.DB.prepare('UPDATE product_licenses SET credential_hash=?1,updated_at=?2 WHERE user_id=?3').bind(sharedHash, timestamp, user.id).run();
+    }
+    const products = await env.DB.prepare('SELECT id,code FROM platform_products WHERE active=1').all();
+    const selectedByCode = new Map(selections.map(item => [String(item.code || '').toLowerCase(), item]));
+    const statements = [];
+    for (const product of products.results) {
+      const selection = selectedByCode.get(String(product.code).toLowerCase());
+      if (!selection?.enabled) {
+        statements.push(env.DB.prepare(`UPDATE product_licenses SET status='cancelled',updated_at=?1 WHERE user_id=?2 AND product_id=?3`).bind(timestamp, user.id, product.id));
+        continue;
+      }
+      const expiresAt = new Date(Date.now() + Math.min(Math.max(Number(selection.days || 1), 1), 3650) * 86400000).toISOString();
+      const maxDevices = Math.min(Math.max(Number(selection.max_devices || 1), 1), 100);
+      const status = ['active', 'blocked'].includes(selection.status) ? selection.status : 'active';
+      statements.push(env.DB.prepare(`INSERT INTO product_licenses(user_id,product_id,credential_hash,plan,status,expires_at,max_devices,created_at,updated_at)
+        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)
+        ON CONFLICT(user_id,product_id) DO UPDATE SET credential_hash=excluded.credential_hash,plan=excluded.plan,
+        status=excluded.status,expires_at=excluded.expires_at,max_devices=excluded.max_devices,updated_at=excluded.updated_at`)
+        .bind(user.id, product.id, sharedHash, String(selection.plan || 'standard').slice(0, 40), status, expiresAt, maxDevices, timestamp));
+    }
+    if (statements.length) await env.DB.batch(statements);
+    await audit(env, 'master_user_saved', { products: enabled.map(item => item.code), passwordChanged: Boolean(password), admin: admin.email }, user.id);
+    return response({ ok: true, id: user.id }, user.created_at ? 200 : 201);
+  }
+  if (/^\/api\/master\/users\/(release-devices|reset-password|delete)$/.test(path) && request.method === 'POST') {
+    const body = await jsonBody(request).catch(() => ({}));
+    const user = await env.DB.prepare('SELECT * FROM license_users WHERE id=?1').bind(Number(body.id || 0)).first();
+    if (!user) return response({ ok: false, message: 'Usuario no encontrado.' }, 404);
+    if (path.endsWith('/release-devices')) {
+      await env.DB.prepare('UPDATE license_devices SET active=0 WHERE user_id=?1').bind(user.id).run();
+      await audit(env, 'master_devices_released', { admin: admin.email }, user.id);
+      return response({ ok: true });
+    }
+    if (path.endsWith('/reset-password')) {
+      const temporary = `M3D-${base64Url(crypto.getRandomValues(new Uint8Array(9)))}`;
+      const passwordHash = await hashPassword(temporary);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(passwordHash, nowIso(), user.id),
+        env.DB.prepare('UPDATE product_licenses SET credential_hash=?1,updated_at=?2 WHERE user_id=?3').bind(passwordHash, nowIso(), user.id),
+        env.DB.prepare('UPDATE license_devices SET active=0 WHERE user_id=?1').bind(user.id)
+      ]);
+      await audit(env, 'master_password_reset', { admin: admin.email }, user.id);
+      return response({ ok: true, temporary_password: temporary });
+    }
+    if (String(user.email).toLowerCase() === String(env.MASTER_EMAIL || '').toLowerCase()) return response({ ok: false, message: 'La cuenta propietaria no se puede eliminar.' }, 400);
+    await env.DB.prepare('DELETE FROM license_users WHERE id=?1').bind(user.id).run();
+    await audit(env, 'master_user_deleted', { deletedEmail: user.email, admin: admin.email });
+    return response({ ok: true });
   }
   if (path === '/api/master/licenses' && request.method === 'GET') {
     const { results } = await env.DB.prepare(`SELECT pl.id,u.email,u.name,p.code product_code,p.name product_name,

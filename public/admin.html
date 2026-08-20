@@ -6,6 +6,7 @@
   <meta name="robots" content="noindex,nofollow">
   <title>MODULAR-3D · Panel maestro</title>
   <link rel="stylesheet" href="/admin.css">
+  <link rel="stylesheet" href="/admin-v2.css">
 </head>
 <body>
   <section id="login" class="login-shell">
@@ -42,19 +43,18 @@
       <section id="content" aria-live="polite"></section>
     </main>
   </div>
-  <dialog id="license-dialog">
-    <form id="license-form" method="dialog">
-      <div class="dialog-head"><h2>Nueva licencia</h2><button type="button" data-close aria-label="Cerrar">×</button></div>
+  <dialog id="user-dialog">
+    <form id="user-form" method="dialog">
+      <div class="dialog-head"><h2 id="user-dialog-title">Nuevo usuario</h2><button type="button" data-close aria-label="Cerrar">×</button></div>
+      <input name="id" type="hidden">
       <div class="form-grid">
         <label>Nombre<input name="name" required></label>
         <label>Correo<input name="email" type="email" required></label>
-        <label>Producto<select name="product_code" id="license-product" required></select></label>
-        <label>Plan<input name="plan" value="standard" required></label>
-        <label>Duración (días)<input name="days" type="number" value="365" min="1" max="3650" required></label>
-        <label>Dispositivos<input name="max_devices" type="number" value="1" min="1" max="100" required></label>
-        <label class="wide">Clave inicial<input name="password" type="text" minlength="10" required><small>Entrégala al cliente por un canal seguro.</small></label>
+        <label class="wide">Contraseña compartida<input name="password" type="password" minlength="10"><small id="password-help">Obligatoria para usuarios nuevos. Se utilizará en todos sus productos.</small></label>
       </div>
-      <div class="actions"><button type="button" class="secondary" data-close>Cancelar</button><button type="submit">Crear licencia</button></div>
+      <h3 class="products-title">Productos y vigencia individual</h3>
+      <div id="user-products" class="product-editor"></div>
+      <div class="actions"><button type="button" class="secondary" data-close>Cancelar</button><button type="submit">Guardar usuario</button></div>
     </form>
   </dialog>
   <script type="module" src="/admin.js"></script>
