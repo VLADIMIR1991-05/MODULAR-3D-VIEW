@@ -87,3 +87,9 @@ jobs:
 
       - name: Publicar Worker
         run: npx wrangler deploy --config wrangler.ci.json
+
+      - name: Probar usuarios y contraseñas en producción
+        env:
+          APP_BASE_URL: https://modular-3d-view.lenin19910527.workers.dev
+          MASTER_EMAIL: desarrollo@modular-3d.com
+        run: node scripts/smoke-master.mjs

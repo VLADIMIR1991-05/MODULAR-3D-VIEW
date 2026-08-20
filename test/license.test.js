@@ -14,7 +14,8 @@ test('validates legacy Python PBKDF2 password hashes', async () => {
 
 test('validates a migrated D1 license without an HTTP subrequest', async () => {
   const password = 'Licencia-M3D-2026';
-  const passwordHash = await licenseInternals.hashPassword(password);
+  const secret = 'secreto-interno-de-pruebas-con-32-caracteres';
+  const passwordHash = await licenseInternals.hashPassword(password, secret);
   const user = {
     id: 7,
     email: 'cliente@example.com',
@@ -23,6 +24,7 @@ test('validates a migrated D1 license without an HTTP subrequest', async () => {
     expires_at: new Date(Date.now() + 86400000).toISOString()
   };
   const env = {
+    MODULAR3D_TOKEN_SECRET: secret,
     DB: {
       prepare() {
         return {
@@ -34,6 +36,15 @@ test('validates a migrated D1 license without an HTTP subrequest', async () => {
   };
   assert.equal((await validateLicenseKey(user.email, password, env)).valid, true);
   assert.equal((await validateLicenseKey(user.email, 'incorrecta', env)).valid, false);
+});
+
+test('creates fast peppered credentials suitable for Workers Free', async () => {
+  const secret = 'secreto-interno-de-pruebas-con-32-caracteres';
+  const encoded = await licenseInternals.hashPassword('Clave-nueva-2026', secret);
+  assert.match(encoded, /^hmac_sha256\$1\$/);
+  assert.equal(await licenseInternals.verifyPassword('Clave-nueva-2026', encoded, secret), true);
+  assert.equal(await licenseInternals.verifyPassword('incorrecta', encoded, secret), false);
+  assert.equal(await licenseInternals.verifyPassword('Clave-nueva-2026', encoded, 'otro-secreto'), false);
 });
 
 test('constant-time comparison rejects different master secrets', () => {

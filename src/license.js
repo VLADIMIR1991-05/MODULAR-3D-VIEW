@@ -33,17 +33,26 @@ async function hmac(value, secret) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return base64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value))));
 }
-async function verifyPassword(password, encoded) {
+async function verifyPassword(password, encoded, secret = '') {
   try {
     const [algorithm, iterationText, saltText, digestText] = String(encoded).split('$');
+    if (algorithm === 'hmac_sha256') {
+      if (!secret || iterationText !== '1') return false;
+      const digest = await hmac(`${saltText}.${password}`, secret);
+      return constantTimeEqual(digest, digestText);
+    }
     if (algorithm !== 'pbkdf2_sha256') return false;
     const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: unbase64Url(saltText), iterations: Number(iterationText) }, key, 256);
     return constantTimeEqual(base64Url(new Uint8Array(bits)), base64Url(unbase64Url(digestText)));
   } catch { return false; }
 }
-async function hashPassword(password) {
+async function hashPassword(password, secret = '') {
   const salt = crypto.getRandomValues(new Uint8Array(16));
+  if (secret) {
+    const saltText = base64Url(salt);
+    return `hmac_sha256$1$${saltText}$${await hmac(`${saltText}.${password}`, secret)}`;
+  }
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
   const digest = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 210000 }, key, 256));
   return `pbkdf2_sha256$210000$${base64Url(salt)}$${base64Url(digest)}`;
@@ -160,7 +169,7 @@ async function login(request, env) {
     return response({ ok: false, code: 'TOO_MANY_ATTEMPTS', message: 'Demasiados intentos. Intenta nuevamente más tarde.' }, 429, { 'retry-after': '900' });
   }
   const user = await findProductLicense(env, email, productCode);
-  if (!user || !await verifyPassword(String(body.password), user.credential_hash)) {
+  if (!user || !await verifyPassword(String(body.password), user.credential_hash, env.MODULAR3D_TOKEN_SECRET)) {
     await audit(env, 'login_failed', { email }, user?.id, machineId);
     return response({ ok: false, code: 'INVALID_CREDENTIALS' }, 401);
   }
@@ -206,7 +215,7 @@ export async function validateLicenseKey(email, licenseKey, env) {
   if (!env.DB) return { valid: false, active: false, message: 'Base de licencias no configurada.' };
   const user = await findProductLicense(env, String(email || '').trim().toLowerCase(), 'modular3d_plugin');
   const [valid, , message] = user ? licenseState(user) : [false, null, 'Licencia no encontrada.'];
-  const passwordValid = user && await verifyPassword(String(licenseKey || ''), user.credential_hash);
+  const passwordValid = user && await verifyPassword(String(licenseKey || ''), user.credential_hash, env.MODULAR3D_TOKEN_SECRET);
   return { valid: Boolean(valid && passwordValid), active: Boolean(valid && passwordValid), message: valid && passwordValid ? 'Licencia activa.' : message || 'Licencia inválida.' };
 }
 async function adminUsers(request, env) {
@@ -225,7 +234,7 @@ async function adminUsers(request, env) {
   const expires = new Date(Date.now() + Math.min(Math.max(Number(body.days || 30), 1), 3650) * 86400000).toISOString();
   try {
     const created = await env.DB.prepare(`INSERT INTO license_users(email,name,password_hash,status,expires_at,max_devices,created_at,updated_at)
-      VALUES(?1,?2,?3,'active',?4,?5,?6,?6) RETURNING id`).bind(email, String(body.name || '').trim(), await hashPassword(password), expires, Math.min(Math.max(Number(body.max_devices || 1), 1), 10), timestamp).first();
+      VALUES(?1,?2,?3,'active',?4,?5,?6,?6) RETURNING id`).bind(email, String(body.name || '').trim(), await hashPassword(password, env.MODULAR3D_TOKEN_SECRET), expires, Math.min(Math.max(Number(body.max_devices || 1), 1), 10), timestamp).first();
     return response({ ok: true, id: created.id }, 201);
   } catch { return response({ ok: false, message: 'Ese correo ya existe.' }, 409); }
 }
@@ -238,7 +247,7 @@ async function adminAction(path, request, env) {
   else if (path.endsWith('/users/delete')) await env.DB.prepare('DELETE FROM license_users WHERE id=?1').bind(user.id).run();
   else if (path.endsWith('/users/reset-password')) {
     const temporary = `M3D-${base64Url(crypto.getRandomValues(new Uint8Array(9)))}`;
-    const passwordHash = await hashPassword(temporary);
+    const passwordHash = await hashPassword(temporary, env.MODULAR3D_TOKEN_SECRET);
     await env.DB.batch([
       env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(passwordHash, nowIso(), user.id),
       env.DB.prepare('UPDATE product_licenses SET credential_hash=?1,updated_at=?2 WHERE user_id=?3').bind(passwordHash, nowIso(), user.id),
@@ -307,7 +316,7 @@ async function masterLogin(request, env) {
   }
   const user = await findUserByEmail(env, email);
   const suppliedPassword = String(body.password || '');
-  const databasePasswordValid = Boolean(user && await verifyPassword(suppliedPassword, user.password_hash));
+  const databasePasswordValid = Boolean(user && await verifyPassword(suppliedPassword, user.password_hash, env.MODULAR3D_TOKEN_SECRET));
   const masterSecretValid = Boolean(
     env.MASTER_PANEL_PASSWORD &&
     env.MASTER_EMAIL &&
@@ -437,7 +446,7 @@ async function masterApi(path, request, env) {
     const duplicate = await env.DB.prepare('SELECT id FROM license_users WHERE email=?1 COLLATE NOCASE AND id<>?2').bind(email, Number(user?.id || 0)).first();
     if (duplicate) return response({ ok: false, message: 'Ese correo pertenece a otro usuario.' }, 409);
     const timestamp = nowIso();
-    const sharedHash = password ? await hashPassword(password) : user?.password_hash;
+    const sharedHash = password ? await hashPassword(password, env.MODULAR3D_TOKEN_SECRET) : user?.password_hash;
     const enabled = selections.filter(item => item.enabled);
     const expirations = enabled.map(item => new Date(Date.now() + Math.min(Math.max(Number(item.days || 1), 1), 3650) * 86400000).toISOString());
     const identityExpires = expirations.sort().at(-1);
@@ -480,7 +489,7 @@ async function masterApi(path, request, env) {
     if (!user) return response({ ok: false, message: 'Usuario no encontrado.' }, 404);
     if (password.length < 10) return response({ ok: false, message: 'La contraseña nueva debe tener mínimo 10 caracteres.' }, 400);
     try {
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(password, env.MODULAR3D_TOKEN_SECRET);
       const timestamp = nowIso();
       await env.DB.batch([
         env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(passwordHash, timestamp, user.id),
@@ -505,7 +514,7 @@ async function masterApi(path, request, env) {
     }
     if (path.endsWith('/reset-password')) {
       const temporary = `M3D-${base64Url(crypto.getRandomValues(new Uint8Array(9)))}`;
-      const passwordHash = await hashPassword(temporary);
+      const passwordHash = await hashPassword(temporary, env.MODULAR3D_TOKEN_SECRET);
       await env.DB.batch([
         env.DB.prepare('UPDATE license_users SET password_hash=?1,updated_at=?2 WHERE id=?3').bind(passwordHash, nowIso(), user.id),
         env.DB.prepare('UPDATE product_licenses SET credential_hash=?1,updated_at=?2 WHERE user_id=?3').bind(passwordHash, nowIso(), user.id),
@@ -541,12 +550,12 @@ async function masterApi(path, request, env) {
     let user = await findUserByEmail(env, email);
     if (!user) {
       const created = await env.DB.prepare(`INSERT INTO license_users(email,name,password_hash,status,expires_at,max_devices,created_at,updated_at)
-        VALUES(?1,?2,?3,'active',?4,?5,?6,?6) RETURNING id`).bind(email, String(body.name || '').trim(), await hashPassword(password), expiresAt, Math.min(Math.max(Number(body.max_devices || 1), 1), 10), timestamp).first();
+        VALUES(?1,?2,?3,'active',?4,?5,?6,?6) RETURNING id`).bind(email, String(body.name || '').trim(), await hashPassword(password, env.MODULAR3D_TOKEN_SECRET), expiresAt, Math.min(Math.max(Number(body.max_devices || 1), 1), 10), timestamp).first();
       user = { id: created.id };
     }
     try {
       const created = await env.DB.prepare(`INSERT INTO product_licenses(user_id,product_id,credential_hash,plan,status,expires_at,max_devices,created_at,updated_at)
-        VALUES(?1,?2,?3,?4,'active',?5,?6,?7,?7) RETURNING id`).bind(user.id, product.id, await hashPassword(password), String(body.plan || 'standard').slice(0, 40), expiresAt, Math.min(Math.max(Number(body.max_devices || 1), 1), 100), timestamp).first();
+        VALUES(?1,?2,?3,?4,'active',?5,?6,?7,?7) RETURNING id`).bind(user.id, product.id, await hashPassword(password, env.MODULAR3D_TOKEN_SECRET), String(body.plan || 'standard').slice(0, 40), expiresAt, Math.min(Math.max(Number(body.max_devices || 1), 1), 100), timestamp).first();
       await audit(env, 'master_license_created', { licenseId: created.id, productCode, admin: admin.email }, user.id);
       return response({ ok: true, id: created.id }, 201);
     } catch { return response({ ok: false, message: 'Ese usuario ya tiene licencia para este producto.' }, 409); }

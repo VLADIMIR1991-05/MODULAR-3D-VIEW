@@ -47,3 +47,9 @@ test('product catalog distinguishes web applications and downloadable plugins', 
   assert.match(migration, /launch_url/);
   assert.match(migration, /download_url/);
 });
+
+test('QR Dinámico catalog points to its official repository', async () => {
+  const migration = await readFile(new URL('../migrations/0006_qr_repository.sql', import.meta.url), 'utf8');
+  assert.match(migration, /VLADIMIR1991-05\/QR_DINAMICO/);
+  assert.match(migration, /qr_dinamico/);
+});
