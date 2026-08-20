@@ -1,6 +1,5 @@
 import { buildTrimbleAuthorizeUrl, json, oauthStateCookie, parseCookies, safeEqual, sessionCookie, trimbleApiBase, TRIMBLE_ID_BASE } from './core.js';
 import { licenseApi, validateLicenseKey } from './license.js';
-import { temporaryMigration } from './temporary-migration.js';
 
 const sessions = new Map();
 const oauthStates = new Map();
@@ -371,8 +370,6 @@ async function api(request, env) {
 
 export default {
   async fetch(request, env) {
-    const migrationResponse = await temporaryMigration(request, env);
-    if (migrationResponse) return migrationResponse;
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/')) return api(request, env);
     return env.ASSETS.fetch(request);
