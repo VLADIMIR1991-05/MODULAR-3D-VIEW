@@ -35,3 +35,8 @@ test('validates a migrated D1 license without an HTTP subrequest', async () => {
   assert.equal((await validateLicenseKey(user.email, password, env)).valid, true);
   assert.equal((await validateLicenseKey(user.email, 'incorrecta', env)).valid, false);
 });
+
+test('constant-time comparison rejects different master secrets', () => {
+  assert.equal(licenseInternals.constantTimeEqual('Clave-Maestra-2026!', 'Clave-Maestra-2026!'), true);
+  assert.equal(licenseInternals.constantTimeEqual('Clave-Maestra-2026!', 'otra-clave'), false);
+});

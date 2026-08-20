@@ -304,14 +304,22 @@ async function masterLogin(request, env) {
     return response({ ok: false, message: 'Demasiados intentos. Espera 15 minutos.' }, 429, { 'retry-after': '900' });
   }
   const user = await findUserByEmail(env, email);
-  if (!user || !await verifyPassword(String(body.password || ''), user.password_hash)) {
+  const suppliedPassword = String(body.password || '');
+  const databasePasswordValid = Boolean(user && await verifyPassword(suppliedPassword, user.password_hash));
+  const masterSecretValid = Boolean(
+    env.MASTER_PANEL_PASSWORD &&
+    env.MASTER_EMAIL &&
+    email === String(env.MASTER_EMAIL).toLowerCase() &&
+    constantTimeEqual(suppliedPassword, String(env.MASTER_PANEL_PASSWORD))
+  );
+  if (!databasePasswordValid && !masterSecretValid) {
     await audit(env, 'master_login_failed', { email }, user?.id);
     return response({ ok: false, message: 'Correo o contraseña incorrectos.' }, 401);
   }
   let admin = await env.DB.prepare('SELECT id,email,name,role,active FROM platform_admins WHERE email=?1 COLLATE NOCASE').bind(email).first();
   if (!admin && env.MASTER_EMAIL && email === String(env.MASTER_EMAIL).toLowerCase()) {
     await env.DB.prepare(`INSERT OR IGNORE INTO platform_admins(email,name,role,active,created_at,updated_at)
-      VALUES(?1,?2,'owner',1,?3,?3)`).bind(email, user.name || 'Propietario', nowIso()).run();
+      VALUES(?1,?2,'owner',1,?3,?3)`).bind(email, user?.name || 'Lenin Vladimir Peñafiel Buestán', nowIso()).run();
     admin = await env.DB.prepare('SELECT id,email,name,role,active FROM platform_admins WHERE email=?1 COLLATE NOCASE').bind(email).first();
   }
   if (!admin || Number(admin.active) !== 1) return response({ ok: false, message: 'Esta cuenta no tiene acceso administrativo.' }, 403);
@@ -320,7 +328,7 @@ async function masterLogin(request, env) {
   await env.SESSIONS.put(`master:${sessionId}`, JSON.stringify({ adminId: admin.id, expiresAt }), { expirationTtl: 28800 });
   await clearRateLimit(env, `master:${email}`);
   await clearRateLimit(env, `master-ip:${clientIp}`);
-  await audit(env, 'master_login', { role: admin.role }, user.id);
+  await audit(env, 'master_login', { role: admin.role }, user?.id || null);
   return response({ ok: true, admin }, 200, { 'set-cookie': masterCookie(sessionId, 28800, request) });
 }
 
